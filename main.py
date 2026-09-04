@@ -1,248 +1,100 @@
-"""PyQt6 desktop interface for the SIF Insight Console.
+"""PyQt6 desktop application for the SIF Insight Console.
 
 Oil India Limited - Problem Statement 26165.
 
-The window is the last stage of the pipeline in :mod:`sif.pipeline`: it drives
-the analysis from a worker thread and renders what comes back as HSE
-intelligence.
+This module is the controller: it owns the pipeline, the MLOps service and the
+document extractor, runs all of them on worker threads, and pushes results into
+the passive views in :mod:`ui.views`.
 
-Layout
-------
-+----------------------------+------------------------------------------------+
-| LEFT  - Control panel      | RIGHT - Analytics dashboard                    |
-|  * free-text ingestion box |  * KPI header (processed, SIF, % SIF, risk)    |
-|  * encoder selector        |  * Incident matrix / Risk hotspots / Review    |
-|  * Process Text            |  * evidence pane for the selected report       |
-|  * Batch Import CSV        |                                                |
-+----------------------------+------------------------------------------------+
+Threads
+-------
+``AnalysisWorker``
+    Loads the encoder and runs the pipeline over a batch, streaming one row at a
+    time back to the GUI.
+``ExtractionWorker``
+    Reads PDFs, scans and images through :mod:`sif.ocr` (including PaddleOCR
+    model download on first use).
+``TrainingWorker``
+    Trains the XGBoost model and logs the run to MLflow.
 
-Concurrency
------------
-Model loading, CSV reading and every pipeline stage run inside
-:class:`AnalysisWorker`, a ``QThread``. Results are streamed back one row at a
-time through ``pyqtSignal`` connections, so the Qt event loop never blocks -
-including during the first-run model download, which reports progress through
-the status bar instead of freezing the window.
+None of the three touches a widget: they emit signals, and the slots that render
+them run on the GUI thread.
 """
 
 from __future__ import annotations
 
 import csv
+import logging
 import os
+from collections import Counter
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
-    QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QSizePolicy,
-    QSplitter,
-    QStatusBar,
-    QTableWidget,
-    QTableWidgetItem,
-    QTabWidget,
-    QTextEdit,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from sif import SEED_REPORTS, SIFPipeline
 from sif.lexical import CSV_TEXT_COLUMNS
+from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
+                               log_file_path, set_level)
+from sif.mlops import MLOpsService
+from sif.ocr import DocumentExtractor
+from sif.pipeline import PipelineResult
+from ui.components import HeaderBar, Sidebar
+from ui.theme import STYLESHEET
+from ui.views import (
+    HOTSPOT_COLUMNS,
+    MATRIX_COLUMNS,
+    REVIEW_COLUMNS,
+    AnalyticsView,
+    BatchUploadView,
+    DashboardView,
+    SettingsView,
+    TableView,
+)
 
-__all__ = ["AnalysisWorker", "MetricCard", "DashboardHeader", "MainWindow"]
+__all__ = ["AnalysisWorker", "ExtractionWorker", "TrainingWorker", "OCRProbeWorker",
+           "MainWindow", "create_application"]
+
+LOGGER = logging.getLogger("sif.app")
 
 APP_NAME = "SIF Insight Console"
-APP_SUBTITLE = "Oil India Limited | PS 26165 - UA/UC & Near-Miss Intelligence"
+APP_SUBTITLE = "UA/UC & Near-Miss Intelligence   |   PS 26165"
 
-#: Incident matrix schema: (header label, result key, column width hint).
-TABLE_COLUMNS: Sequence[tuple] = (
-    ("#", "_index", 42),
-    ("Ref", "reference", 74),
-    ("SIF", "sif_potential", 54),
-    ("P(SIF)", "p_sif", 56),
-    ("Risk", "risk_score", 52),
-    ("Band", "risk_band", 66),
-    ("IOGP Rule", "iogp_rule", 168),
-    ("Activity", "activity", 158),
-    ("Location", "location", 158),
-    ("Barrier Failure", "barrier_failure", 250),
-    ("Energy Source", "energy_source", 180),
-    ("Review", "review_trigger", 104),
-    ("Source Narrative", "raw_text", 360),
+NAV_ITEMS = (
+    ("dashboard", "▤", "Dashboard"),
+    ("analysis", "✎", "Report Analysis"),
+    ("batch", "⬆", "Batch Upload"),
+    ("matrix", "▦", "Incident Matrix"),
+    ("hotspots", "⌖", "Risk Hotspots"),
+    ("review", "👤", "Human Review"),
+    ("analytics", "📈", "Analytics"),
+    ("settings", "⚙", "Settings"),
 )
 
-HOTSPOT_COLUMNS: Sequence[tuple] = (
-    ("Type", "kind", 150),
-    ("Cluster", "label", 320),
-    ("Reports", "reports", 76),
-    ("SIF", "sif_reports", 60),
-    ("SIF %", "sif_rate", 66),
-    ("Mean risk", "mean_risk", 84),
-    ("Peak risk", "max_risk", 84),
-    ("Dominant rule", "top_rule", 190),
-    ("Dominant barrier", "top_barrier", 260),
-)
-
-REVIEW_COLUMNS: Sequence[tuple] = (
-    ("Trigger", "trigger", 150),
-    ("Ref", "reference", 74),
-    ("Risk", "risk_score", 60),
-    ("SIF", "sif_potential", 54),
-    ("Why a human is needed", "reason", 380),
-    ("Report", "summary", 460),
-)
-
-# Palette -- a single place to retune the visual identity.
-COLOR_BG = "#0f1720"
-COLOR_PANEL = "#16212e"
-COLOR_CARD = "#1d2a3a"
-COLOR_ACCENT = "#00b8a9"
-COLOR_TEXT = "#e6edf3"
-COLOR_MUTED = "#8ba0b5"
-COLOR_DANGER = "#ff5c5c"
-COLOR_WARN = "#f4b942"
-COLOR_OK = "#4cc38a"
-
-#: Risk band -> colour, shared by the matrix and the review queue.
-BAND_COLORS = {"Critical": COLOR_DANGER, "High": "#ff9152",
-               "Medium": COLOR_WARN, "Low": COLOR_OK}
-
-STYLESHEET = f"""
-QMainWindow, QWidget {{
-    background-color: {COLOR_BG};
-    color: {COLOR_TEXT};
-    font-family: "Segoe UI", "DejaVu Sans", Arial, sans-serif;
-    font-size: 13px;
-}}
-QFrame#Panel {{
-    background-color: {COLOR_PANEL};
-    border: 1px solid #24354a;
-    border-radius: 10px;
-}}
-QFrame#Card {{
-    background-color: {COLOR_CARD};
-    border: 1px solid #2b3d52;
-    border-radius: 10px;
-}}
-QLabel#Title {{ font-size: 20px; font-weight: 700; color: {COLOR_TEXT}; }}
-QLabel#Subtitle {{ font-size: 12px; color: {COLOR_MUTED}; }}
-QLabel#SectionTitle {{ font-size: 14px; font-weight: 600; color: {COLOR_ACCENT}; }}
-QLabel#CardValue {{ font-size: 26px; font-weight: 700; color: {COLOR_TEXT}; }}
-QLabel#CardCaption {{ font-size: 11px; color: {COLOR_MUTED}; letter-spacing: 1px; }}
-QTextEdit {{
-    background-color: #101a25;
-    border: 1px solid #2b3d52;
-    border-radius: 8px;
-    padding: 8px;
-    selection-background-color: {COLOR_ACCENT};
-}}
-QComboBox {{
-    background-color: {COLOR_CARD};
-    border: 1px solid #33506b;
-    border-radius: 8px;
-    padding: 6px 10px;
-}}
-QComboBox QAbstractItemView {{
-    background-color: {COLOR_CARD};
-    selection-background-color: #1f4a55;
-    border: 1px solid #33506b;
-}}
-QPushButton {{
-    background-color: {COLOR_CARD};
-    border: 1px solid #33506b;
-    border-radius: 8px;
-    padding: 9px 14px;
-    font-weight: 600;
-}}
-QPushButton:hover {{ background-color: #24374d; }}
-QPushButton:pressed {{ background-color: #1a2836; }}
-QPushButton:disabled {{ color: #5c6f82; border-color: #24354a; }}
-QPushButton#Primary {{
-    background-color: {COLOR_ACCENT};
-    border: 1px solid {COLOR_ACCENT};
-    color: #06231f;
-}}
-QPushButton#Primary:hover {{ background-color: #16cbbc; }}
-QPushButton#Primary:disabled {{ background-color: #2c4a49; color: #7a9694; }}
-QTableWidget {{
-    background-color: #101a25;
-    alternate-background-color: #13202d;
-    gridline-color: #24354a;
-    border: 1px solid #2b3d52;
-    border-radius: 8px;
-    selection-background-color: #1f4a55;
-}}
-QHeaderView::section {{
-    background-color: {COLOR_CARD};
-    color: {COLOR_MUTED};
-    padding: 7px;
-    border: none;
-    border-right: 1px solid #24354a;
-    font-weight: 600;
-}}
-QTabWidget::pane {{ border: 1px solid #24354a; border-radius: 8px; top: -1px; }}
-QTabBar::tab {{
-    background: {COLOR_CARD};
-    color: {COLOR_MUTED};
-    padding: 7px 16px;
-    border: 1px solid #24354a;
-    border-bottom: none;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-    margin-right: 3px;
-}}
-QTabBar::tab:selected {{ color: {COLOR_TEXT}; background: {COLOR_PANEL}; }}
-QProgressBar {{
-    background-color: #101a25;
-    border: 1px solid #2b3d52;
-    border-radius: 6px;
-    height: 8px;
-    text-align: center;
-}}
-QProgressBar::chunk {{ background-color: {COLOR_ACCENT}; border-radius: 5px; }}
-QStatusBar {{ color: {COLOR_MUTED}; border-top: 1px solid #24354a; }}
-"""
+DOCUMENT_FILTER = ("Documents (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.txt *.md);;"
+                   "All files (*)")
 
 
 # ---------------------------------------------------------------------------
-# Worker thread
+# Workers
 # ---------------------------------------------------------------------------
 
 
 class AnalysisWorker(QThread):
-    """Background thread that runs the pipeline and streams rows to the GUI.
-
-    The worker accepts either an in-memory list of narratives or a CSV path.
-    Encoder loading, file I/O and every pipeline stage happen inside :meth:`run`,
-    i.e. off the GUI thread, and each finished row is emitted immediately rather
-    than being batched, so the dashboard updates in real time.
-
-    Signals
-    -------
-    row_ready(dict)
-        One completed :class:`~sif.pipeline.PipelineResult` as a dictionary.
-    progress(int, int)
-        ``(completed, total)`` counters for the progress bar.
-    status(str)
-        Human-readable stage message ("loading encoder", "encoder ready: ...").
-    failed(str)
-        Error message; the run is aborted after this.
-    completed(int)
-        Number of rows successfully emitted once the run finishes.
-    """
+    """Runs the pipeline over a batch, streaming results back one row at a time."""
 
     row_ready = pyqtSignal(dict)
     progress = pyqtSignal(int, int)
@@ -250,31 +102,23 @@ class AnalysisWorker(QThread):
     failed = pyqtSignal(str)
     completed = pyqtSignal(int)
 
-    #: Delay between rows (ms) so batch streaming is visible during a demo.
-    STREAM_DELAY_MS = 30
+    STREAM_DELAY_MS = 25
 
-    def __init__(
-        self,
-        pipeline: SIFPipeline,
-        texts: Optional[Sequence[str]] = None,
-        csv_path: Optional[str] = None,
-        references: Optional[Sequence[str]] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    def __init__(self, pipeline: SIFPipeline, texts: Optional[Sequence[str]] = None,
+                 csv_path: Optional[str] = None, references: Optional[Sequence[str]] = None,
+                 parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._pipeline = pipeline
-        self._texts: List[str] = list(texts or [])
-        self._references: List[str] = list(references or [])
+        self._texts = list(texts or [])
+        self._references = list(references or [])
         self._csv_path = csv_path
 
-    # -- QThread entry point ----------------------------------------------
-
-    def run(self) -> None:  # noqa: D102 - documented in the class docstring
+    def run(self) -> None:  # noqa: D102 - documented on the class
         try:
             texts, references = self._texts, self._references
             if self._csv_path:
                 self.status.emit("Reading CSV...")
-                texts, references = self._read_csv(self._csv_path)
+                texts, references = read_csv_reports(self._csv_path)
 
             pairs = [(text.strip(), references[index] if index < len(references) else "")
                      for index, text in enumerate(texts)
@@ -286,7 +130,6 @@ class AnalysisWorker(QThread):
             self.status.emit("Loading semantic encoder (first run may download the model)...")
             self.status.emit(f"Encoder ready - {self._pipeline.warm_up()}")
 
-            total = len(pairs)
             emitted = 0
             for index, (narrative, reference) in enumerate(pairs, start=1):
                 if self.isInterruptionRequested():
@@ -296,135 +139,121 @@ class AnalysisWorker(QThread):
                 payload["_timestamp"] = datetime.now().strftime("%H:%M:%S")
                 self.row_ready.emit(payload)
                 emitted += 1
-                self.progress.emit(index, total)
+                self.progress.emit(index, len(pairs))
                 if self.STREAM_DELAY_MS:
                     self.msleep(self.STREAM_DELAY_MS)
-
             self.completed.emit(emitted)
         except Exception as exc:  # pragma: no cover - defensive GUI guard
+            LOGGER.exception("Analysis failed")
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
-    # -- helpers -----------------------------------------------------------
 
-    @staticmethod
-    def _read_csv(path: str):
-        """Extract narratives (and references, when present) from a CSV file.
+class ExtractionWorker(QThread):
+    """Reads documents (PDF, scans, images, text) off the GUI thread."""
 
-        Recognises the common column names listed in
-        :data:`sif.lexical.CSV_TEXT_COLUMNS`. If none is present, the longest
-        text cell in each row is used, which keeps the importer usable with
-        arbitrary contractor-supplied exports.
-        """
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"CSV file not found: {path}")
+    document_ready = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+    completed = pyqtSignal(int)
 
-        narratives: List[str] = []
-        references: List[str] = []
-        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-            sample = handle.read(4096)
+    def __init__(self, extractor: DocumentExtractor, paths: Sequence[str],
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._extractor = extractor
+        self._paths = list(paths)
+
+    def run(self) -> None:  # noqa: D102 - documented on the class
+        try:
+            for document in self._extractor.extract_many(self._paths):
+                if self.isInterruptionRequested():
+                    break
+                payload = document.to_dict()
+                payload["name"] = os.path.basename(document.path)
+                payload["blocks"] = len(document.blocks())
+                payload["text"] = document.text
+                payload["note"] = "; ".join(document.warnings) or "-"
+                self.document_ready.emit(payload)
+            self.completed.emit(len(self._paths))
+        except Exception as exc:  # pragma: no cover - defensive GUI guard
+            LOGGER.exception("Extraction failed")
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+class OCRProbeWorker(QThread):
+    """Brings the OCR engine up (downloading models on first use) off the GUI thread."""
+
+    probed = pyqtSignal(bool, str)
+
+    def __init__(self, extractor: DocumentExtractor, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._extractor = extractor
+
+    def run(self) -> None:  # noqa: D102 - documented on the class
+        ok, message = self._extractor.probe()
+        LOGGER.info("OCR probe: %s", message) if ok else LOGGER.warning("OCR probe: %s", message)
+        self.probed.emit(ok, message)
+
+
+class TrainingWorker(QThread):
+    """Trains the XGBoost model and logs the run to MLflow."""
+
+    trained = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, service: MLOpsService, results: Sequence[PipelineResult],
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._results = list(results)
+
+    def run(self) -> None:  # noqa: D102 - documented on the class
+        try:
+            report = self._service.train(self._results)
+            self.trained.emit(report.to_dict())
+        except Exception as exc:  # noqa: BLE001 - surfaced in the UI
+            LOGGER.warning("Training failed: %s", exc)
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+def read_csv_reports(path: str) -> Tuple[List[str], List[str]]:
+    """Extract narratives and references from a CSV export.
+
+    Recognises the column names in :data:`sif.lexical.CSV_TEXT_COLUMNS`; without
+    one, the longest text cell in each row is used, which keeps the importer
+    usable with arbitrary contractor spreadsheets.
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"CSV file not found: {path}")
+
+    narratives: List[str] = []
+    references: List[str] = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        sample = handle.read(4096)
+        handle.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+
+        reader = csv.DictReader(handle, dialect=dialect)
+        if reader.fieldnames:
+            lookup = {(name or "").strip().lower(): name for name in reader.fieldnames}
+            target = next((lookup[key] for key in CSV_TEXT_COLUMNS if key in lookup), None)
+            ref_key = next((lookup[key] for key in ("report_id", "id", "ref", "reference")
+                            if key in lookup), None)
+            for row in reader:
+                if target and row.get(target):
+                    narratives.append(str(row[target]))
+                else:
+                    values = [str(value) for value in row.values() if value]
+                    if not values:
+                        continue
+                    narratives.append(max(values, key=len))
+                references.append(str(row.get(ref_key, "")) if ref_key else "")
+        else:
             handle.seek(0)
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel  # Fall back to a plain comma-separated read.
-
-            reader = csv.DictReader(handle, dialect=dialect)
-            if reader.fieldnames:
-                lookup = {(name or "").strip().lower(): name for name in reader.fieldnames}
-                target = next((lookup[key] for key in CSV_TEXT_COLUMNS if key in lookup), None)
-                ref_key = next((lookup[key] for key in ("report_id", "id", "ref", "reference")
-                                if key in lookup), None)
-                for row in reader:
-                    if target and row.get(target):
-                        narratives.append(str(row[target]))
-                    else:
-                        values = [str(value) for value in row.values() if value]
-                        if not values:
-                            continue
-                        narratives.append(max(values, key=len))
-                    references.append(str(row.get(ref_key, "")) if ref_key else "")
-            else:  # Header-less file: treat every line as one narrative.
-                handle.seek(0)
-                narratives = [line.strip() for line in handle if line.strip()]
-                references = [""] * len(narratives)
-
-        return narratives, references
-
-
-# ---------------------------------------------------------------------------
-# Dashboard widgets
-# ---------------------------------------------------------------------------
-
-
-class MetricCard(QFrame):
-    """Stylised KPI tile showing one headline metric."""
-
-    def __init__(self, caption: str, value: str = "0", accent: str = COLOR_TEXT) -> None:
-        super().__init__()
-        self.setObjectName("Card")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(2)
-
-        self._caption = QLabel(caption.upper())
-        self._caption.setObjectName("CardCaption")
-
-        self._value = QLabel(value)
-        self._value.setObjectName("CardValue")
-        self._value.setStyleSheet(f"color: {accent};")
-
-        layout.addWidget(self._caption)
-        layout.addWidget(self._value)
-
-    def set_value(self, value: str) -> None:
-        """Update the displayed metric value."""
-        self._value.setText(value)
-
-
-class DashboardHeader(QFrame):
-    """Header strip holding the headline SIF metrics."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("Panel")
-
-        self.total_card = MetricCard("Total Processed", "0", COLOR_TEXT)
-        self.sif_card = MetricCard("SIF-Potential Events", "0", COLOR_DANGER)
-        self.rate_card = MetricCard("% SIF-Potential", "0.0%", COLOR_WARN)
-        self.risk_card = MetricCard("Mean Risk Score", "0.0", COLOR_ACCENT)
-        self.review_card = MetricCard("Awaiting Human Review", "0", COLOR_TEXT)
-
-        layout = QGridLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-        for column, card in enumerate((self.total_card, self.sif_card, self.rate_card,
-                                       self.risk_card, self.review_card)):
-            layout.addWidget(card, 0, column)
-
-    def update_metrics(self, kpis: Dict[str, object]) -> None:
-        """Refresh all KPI tiles from the pipeline's aggregate."""
-        self.total_card.set_value(str(kpis.get("total", 0)))
-        self.sif_card.set_value(str(kpis.get("sif_potential", 0)))
-        self.rate_card.set_value(f'{float(kpis.get("sif_rate", 0.0)):.1f}%')
-        self.risk_card.set_value(f'{float(kpis.get("mean_risk", 0.0)):.1f}')
-        self.review_card.set_value(str(kpis.get("needs_review", 0)))
-
-
-def _make_table(columns: Sequence[tuple]) -> QTableWidget:
-    """Build a read-only, row-selecting table with the given column schema."""
-    table = QTableWidget(0, len(columns))
-    table.setHorizontalHeaderLabels([label for label, _, _ in columns])
-    table.setAlternatingRowColors(True)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.verticalHeader().setVisible(False)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    table.horizontalHeader().setStretchLastSection(True)
-    for column, (_, _, width) in enumerate(columns):
-        table.setColumnWidth(column, width)
-    return table
+            narratives = [line.strip() for line in handle if line.strip()]
+            references = [""] * len(narratives)
+    return narratives, references
 
 
 # ---------------------------------------------------------------------------
@@ -433,461 +262,552 @@ def _make_table(columns: Sequence[tuple]) -> QTableWidget:
 
 
 class MainWindow(QMainWindow):
-    """Two-pane console: ingestion controls on the left, analytics on the right."""
+    """Sidebar-navigated console wiring the views to the analysis stack."""
 
-    #: Hotspots and the review queue are recomputed every N streamed rows.
-    PANEL_REFRESH_EVERY = 5
+    #: How often the Settings page pulls new log lines (ms).
+    LOG_REFRESH_MS = 1500
 
     def __init__(self) -> None:
         super().__init__()
+        self.ring = configure_logging("INFO")
+        LOGGER.info("%s starting", APP_NAME)
+
         self.pipeline = SIFPipeline()
-        self.worker: Optional[AnalysisWorker] = None
+        self.mlops = MLOpsService()
+        self.extractor = DocumentExtractor()
         self.rows: List[Dict[str, object]] = []
+        self.documents: List[Dict[str, object]] = []
+        self.pending_blocks: List[str] = []
+        self.worker: Optional[QThread] = None
+        self.last_run_count = 0
 
         self.setWindowTitle(APP_NAME)
-        self.resize(1560, 900)
+        self.resize(1600, 980)
         self.setStyleSheet(STYLESHEET)
-
-        self._build_menu()
         self._build_ui()
-        self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage(
-            "Ready - paste a report or load the seed incidents. The encoder loads on "
-            "the first run."
-        )
+        self._connect_views()
+
+        if self.mlops.load_existing():
+            self.pipeline.attach_model(self.mlops)
+            LOGGER.info("Attached previously trained model")
+        self._refresh_settings()
+
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self._refresh_logs)
+        self.log_timer.start(self.LOG_REFRESH_MS)
 
     # -- construction ------------------------------------------------------
 
+    def _build_ui(self) -> None:
+        self.sidebar = Sidebar(NAV_ITEMS)
+        self.sidebar.navigated.connect(self.navigate)
+        self.sidebar.select("dashboard")
+
+        self.header = HeaderBar(APP_NAME, APP_SUBTITLE, "HSE Analyst", "Team Member")
+        self.header.search_changed.connect(self._apply_filter)
+
+        self.dashboard = DashboardView()
+        self.batch_view = BatchUploadView()
+        self.matrix_view = TableView(
+            "Parsed Incident Matrix",
+            "Every analysed report with its verdict, risk score and extracted fields.",
+            MATRIX_COLUMNS)
+        self.hotspot_view = TableView(
+            "Risk Hotspots",
+            "Locations, rule-at-location repeats and barrier failures occurring more than "
+            "once, ranked by SIF count then mean risk.",
+            HOTSPOT_COLUMNS)
+        self.review_view = TableView(
+            "Human Review Queue",
+            "Reports a person must verify: model or rule disagreement, critical risk, thin "
+            "evidence, or high energy with no rule match.",
+            REVIEW_COLUMNS)
+        self.analytics_view = AnalyticsView()
+        self.settings_view = SettingsView()
+
+        self.pages = QStackedWidget()
+        self._page_index: Dict[str, int] = {}
+        for key, widget in (("dashboard", self.dashboard), ("batch", self.batch_view),
+                            ("matrix", self.matrix_view), ("hotspots", self.hotspot_view),
+                            ("review", self.review_view), ("analytics", self.analytics_view),
+                            ("settings", self.settings_view)):
+            self._page_index[key] = self.pages.addWidget(widget)
+        # "Report Analysis" is the dashboard with the ingestion box focused.
+        self._page_index["analysis"] = self._page_index["dashboard"]
+
+        self.status_label = QLabel("Ready - paste a report, load the seed incidents or "
+                                   "upload a document.")
+        self.status_label.setObjectName("Faint")
+        footer = QFrame()
+        footer.setObjectName("Footer")
+        footer.setFixedHeight(34)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(20, 6, 20, 6)
+        self.footer_left = QLabel("Oil India Limited  ·  PS 26165 - UA/UC & Near-Miss "
+                                  "Intelligence")
+        self.footer_left.setObjectName("Faint")
+        footer_layout.addWidget(self.footer_left)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.status_label)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self.header)
+        right_layout.addWidget(self.pages, stretch=1)
+        right_layout.addWidget(footer)
+
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.sidebar)
+        layout.addWidget(right, stretch=1)
+        self.setCentralWidget(container)
+        self._build_menu()
+
     def _build_menu(self) -> None:
-        """Create the minimal application menu."""
         file_menu = self.menuBar().addMenu("&File")
-
-        import_action = QAction("&Batch Import CSV...", self)
-        import_action.setShortcut("Ctrl+O")
-        import_action.triggered.connect(self.import_csv)
-        file_menu.addAction(import_action)
-
-        export_action = QAction("&Export Results CSV...", self)
-        export_action.setShortcut("Ctrl+S")
-        export_action.triggered.connect(self.export_csv)
-        file_menu.addAction(export_action)
-
+        for label, shortcut, slot in (
+            ("&Batch Import CSV...", "Ctrl+O", self.import_csv),
+            ("Add &Documents...", "Ctrl+D", self.add_documents),
+            ("&Export Results CSV...", "Ctrl+S", self.export_csv),
+        ):
+            action = QAction(label, self)
+            action.setShortcut(shortcut)
+            action.triggered.connect(slot)
+            file_menu.addAction(action)
         file_menu.addSeparator()
         quit_action = QAction("E&xit", self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-    def _build_ui(self) -> None:
-        """Assemble the splitter, control panel and analytics dashboard."""
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_control_panel())
-        splitter.addWidget(self._build_dashboard())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([430, 1130])
+    def _connect_views(self) -> None:
+        self.dashboard.analyse_requested.connect(self.analyse_text)
+        self.dashboard.seed_requested.connect(self.load_seed_data)
+        self.dashboard.csv_requested.connect(self.import_csv)
+        self.dashboard.clear_requested.connect(self.clear_dashboard)
+        self.dashboard.encoder_changed.connect(self.change_encoder)
+        self.dashboard.row_selected.connect(self.select_row)
+        self.dashboard.review_requested.connect(self.mark_for_review)
 
-        container = QWidget()
-        outer = QVBoxLayout(container)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.addWidget(splitter)
-        self.setCentralWidget(container)
+        self.batch_view.files_requested.connect(self.add_documents)
+        self.batch_view.csv_requested.connect(self.import_csv)
+        self.batch_view.analyse_requested.connect(self.analyse_extracted)
+        self.batch_view.clear_requested.connect(self.clear_documents)
 
-    def _build_control_panel(self) -> QWidget:
-        """Left pane: title, encoder selector, ingestion box and action buttons."""
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel.setMinimumWidth(390)
+        self.settings_view.log_level_changed.connect(self.change_log_level)
+        self.settings_view.logs_cleared.connect(self.clear_logs)
+        self.settings_view.logs_refreshed.connect(self._refresh_logs)
+        self.settings_view.train_requested.connect(self.train_model)
+        self.settings_view.tracking_changed.connect(self.change_tracking)
+        self.settings_view.ocr_toggled.connect(self.change_ocr)
+        self.settings_view.ocr_test_requested.connect(self._check_ocr)
 
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
+    # -- navigation --------------------------------------------------------
 
-        title = QLabel(APP_NAME)
-        title.setObjectName("Title")
-        subtitle = QLabel(APP_SUBTITLE)
-        subtitle.setObjectName("Subtitle")
-        subtitle.setWordWrap(True)
+    def navigate(self, key: str) -> None:
+        """Switch pages from the sidebar."""
+        self.pages.setCurrentIndex(self._page_index.get(key, 0))
+        if key == "analysis":
+            self.dashboard.input_box.setFocus()
+        elif key == "settings":
+            self._refresh_settings()
+            self._refresh_logs()
 
-        section = QLabel("REPORT INGESTION")
-        section.setObjectName("SectionTitle")
+    # -- analysis actions --------------------------------------------------
 
-        hint = QLabel(
-            "Paste one UA/UC or near-miss narrative per blank-line-separated block. "
-            "The pipeline classifies SIF potential and the IOGP rule, extracts the "
-            "activity, location and failed barrier, then scores and ranks the risk."
-        )
-        hint.setObjectName("Subtitle")
-        hint.setWordWrap(True)
-
-        self.input_box = QTextEdit()
-        self.input_box.setPlaceholderText(
-            "e.g. Near miss at GGS-4: worker on an incomplete scaffold at 6 m with his "
-            "lanyard not anchored while replacing a light fitting..."
-        )
-        self.input_box.setMinimumHeight(190)
-
-        encoder_label = QLabel("SEMANTIC ENCODER")
-        encoder_label.setObjectName("CardCaption")
-        self.encoder_box = QComboBox()
-        self.encoder_box.addItem("Auto - transformer, fall back offline", "auto")
-        self.encoder_box.addItem("Transformer (all-MiniLM-L6-v2)", "transformer")
-        self.encoder_box.addItem("Offline - lexical rules only", "hashing")
-        self.encoder_box.currentIndexChanged.connect(self.on_encoder_changed)
-
-        self.process_button = QPushButton("Process Text")
-        self.process_button.setObjectName("Primary")
-        self.process_button.clicked.connect(self.process_text)
-
-        self.import_button = QPushButton("Batch Import CSV")
-        self.import_button.clicked.connect(self.import_csv)
-
-        self.seed_button = QPushButton("Load 5 Seed Incidents")
-        self.seed_button.clicked.connect(self.load_seed_data)
-
-        self.clear_button = QPushButton("Clear Dashboard")
-        self.clear_button.clicked.connect(self.clear_dashboard)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setVisible(False)
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addSpacing(8)
-        layout.addWidget(section)
-        layout.addWidget(hint)
-        layout.addWidget(self.input_box, stretch=1)
-        layout.addWidget(encoder_label)
-        layout.addWidget(self.encoder_box)
-        layout.addWidget(self.process_button)
-        layout.addWidget(self.import_button)
-        layout.addWidget(self.seed_button)
-        layout.addWidget(self.clear_button)
-        layout.addWidget(self.progress_bar)
-        return panel
-
-    def _build_dashboard(self) -> QWidget:
-        """Right pane: KPI header, the three analysis tabs and the evidence pane."""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        self.header = DashboardHeader()
-
-        self.table = _make_table(TABLE_COLUMNS)
-        self.table.itemSelectionChanged.connect(self.on_row_selected)
-        self.hotspot_table = _make_table(HOTSPOT_COLUMNS)
-        self.review_table = _make_table(REVIEW_COLUMNS)
-
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self.table, "Parsed Incident Matrix")
-        self.tabs.addTab(self.hotspot_table, "Risk Hotspots")
-        self.tabs.addTab(self.review_table, "Human Review Queue")
-
-        self.evidence_box = QTextEdit()
-        self.evidence_box.setReadOnly(True)
-        self.evidence_box.setFixedHeight(112)
-        self.evidence_box.setPlaceholderText(
-            "Select a row to see why the pipeline reached its verdict."
-        )
-
-        matrix_frame = QFrame()
-        matrix_frame.setObjectName("Panel")
-        matrix_layout = QVBoxLayout(matrix_frame)
-        matrix_layout.setContentsMargins(14, 14, 14, 14)
-        matrix_layout.setSpacing(8)
-
-        evidence_title = QLabel("EVIDENCE FOR THE SELECTED REPORT")
-        evidence_title.setObjectName("SectionTitle")
-
-        matrix_layout.addWidget(self.tabs, stretch=1)
-        matrix_layout.addWidget(evidence_title)
-        matrix_layout.addWidget(self.evidence_box)
-
-        layout.addWidget(self.header)
-        layout.addWidget(matrix_frame, stretch=1)
-        return panel
-
-    # -- actions -----------------------------------------------------------
-
-    def on_encoder_changed(self) -> None:
-        """Rebuild the pipeline when the operator picks a different encoder."""
-        backend = self.encoder_box.currentData()
-        self.pipeline = SIFPipeline(backend=backend)
-        self.statusBar().showMessage(
-            f"Encoder set to '{backend}' - it loads on the next run.", 6000)
-
-    def process_text(self) -> None:
-        """Parse the narratives currently in the ingestion box."""
-        raw = self.input_box.toPlainText().strip()
-        if not raw:
-            QMessageBox.information(
-                self, APP_NAME, "Paste at least one report narrative before processing."
-            )
+    def analyse_text(self, raw: str) -> None:
+        """Analyse the narratives in the ingestion box."""
+        blocks = [block.strip() for block in (raw or "").split("\n\n") if block.strip()]
+        if not blocks:
+            QMessageBox.information(self, APP_NAME,
+                                    "Paste at least one report narrative before analysing.")
             return
-
-        # Blank lines separate incidents; a single block is one incident.
-        blocks = [block.strip() for block in raw.split("\n\n") if block.strip()]
-        self._start_worker(AnalysisWorker(self.pipeline, texts=blocks, parent=self))
+        self._start(AnalysisWorker(self.pipeline, texts=blocks, parent=self))
 
     def load_seed_data(self) -> None:
-        """Populate the ingestion box with the five seed incidents and run them."""
-        self.input_box.setPlainText("\n\n".join(SEED_REPORTS))
+        """Load and analyse the five seed incidents."""
+        self.dashboard.input_box.setPlainText("\n\n".join(SEED_REPORTS))
         references = [f"SEED-{number:02d}" for number in range(1, len(SEED_REPORTS) + 1)]
-        self._start_worker(AnalysisWorker(self.pipeline, texts=list(SEED_REPORTS),
-                                          references=references, parent=self))
+        self._start(AnalysisWorker(self.pipeline, texts=list(SEED_REPORTS),
+                                   references=references, parent=self))
 
     def import_csv(self) -> None:
-        """Choose a CSV file and run the pipeline over it on the worker thread."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Batch Import UA/UC Reports", os.getcwd(), "CSV files (*.csv);;All files (*)"
-        )
-        if not path:
+        """Pick a CSV of reports and analyse every row."""
+        path, _ = QFileDialog.getOpenFileName(self, "Batch Import UA/UC Reports", os.getcwd(),
+                                              "CSV files (*.csv);;All files (*)")
+        if path:
+            self._start(AnalysisWorker(self.pipeline, csv_path=path, parent=self))
+
+    def add_documents(self) -> None:
+        """Pick documents and extract their text (OCR where needed)."""
+        paths, _ = QFileDialog.getOpenFileNames(self, "Add report documents", os.getcwd(),
+                                                DOCUMENT_FILTER)
+        if not paths:
             return
-        self._start_worker(AnalysisWorker(self.pipeline, csv_path=path, parent=self))
+        self.navigate("batch")
+        self.sidebar.select("batch")
+        worker = ExtractionWorker(self.extractor, paths, parent=self)
+        worker.document_ready.connect(self.on_document_ready)
+        worker.failed.connect(self.on_failed)
+        worker.completed.connect(lambda count: self._set_status(
+            f"Extracted {count} document(s) - {len(self.pending_blocks)} report block(s) ready"))
+        self._start(worker, busy_message="Extracting document text...")
+
+    def analyse_extracted(self) -> None:
+        """Analyse the blocks recovered from uploaded documents."""
+        if not self.pending_blocks:
+            QMessageBox.information(self, APP_NAME,
+                                    "Add documents first - no extracted text is waiting.")
+            return
+        references = [f"DOC-{number:03d}" for number in range(1, len(self.pending_blocks) + 1)]
+        blocks = list(self.pending_blocks)
+        self.pending_blocks.clear()
+        self._start(AnalysisWorker(self.pipeline, texts=blocks, references=references,
+                                   parent=self))
 
     def export_csv(self) -> None:
-        """Write the current incident matrix to a CSV file."""
+        """Write the incident matrix to a CSV file."""
         if not self.rows:
             QMessageBox.information(self, APP_NAME, "There is nothing to export yet.")
             return
-
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Parsed Results", os.path.join(os.getcwd(), "sif_results.csv"),
-            "CSV files (*.csv)",
-        )
+            "CSV files (*.csv)")
         if not path:
             return
-
-        headers = [label for label, _, _ in TABLE_COLUMNS] + ["Explanation"]
+        headers = [label for label, _, _ in MATRIX_COLUMNS] + ["Explanation"]
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(headers)
                 for index, row in enumerate(self.rows, start=1):
-                    writer.writerow(
-                        [self._cell_text(row, key, index) for _, key, _ in TABLE_COLUMNS]
-                        + [row.get("explanation", "")]
-                    )
+                    writer.writerow([index] + [str(row.get(key, ""))
+                                               for _, key, _ in MATRIX_COLUMNS[1:]]
+                                    + [row.get("explanation", "")])
         except OSError as exc:
             QMessageBox.critical(self, APP_NAME, f"Could not write the file:\n{exc}")
             return
-        self.statusBar().showMessage(f"Exported {len(self.rows)} rows to {path}", 8000)
+        LOGGER.info("Exported %d rows to %s", len(self.rows), path)
+        self._set_status(f"Exported {len(self.rows)} rows to {path}")
 
     def clear_dashboard(self) -> None:
-        """Reset every table, counter and panel."""
+        """Reset every analysis result."""
         self.rows.clear()
-        for table in (self.table, self.hotspot_table, self.review_table):
-            table.setRowCount(0)
-        self.header.update_metrics({})
-        self.evidence_box.clear()
-        self.statusBar().showMessage("Dashboard cleared.", 4000)
+        self.last_run_count = 0
+        self.dashboard.matrix_table.set_rows([])
+        self.dashboard.show_detail(None)
+        self._refresh()
+        LOGGER.info("Dashboard cleared")
+        self._set_status("Dashboard cleared.")
+
+    def clear_documents(self) -> None:
+        """Drop the extraction list and any pending blocks."""
+        self.documents.clear()
+        self.pending_blocks.clear()
+        self.batch_view.set_documents([])
+        self.batch_view.set_preview("")
+        self._set_status("Extraction list cleared.")
+
+    def change_encoder(self, backend: str) -> None:
+        """Rebuild the pipeline around a different encoder."""
+        self.pipeline = SIFPipeline(backend=backend)
+        if self.mlops.model.is_trained:
+            self.pipeline.attach_model(self.mlops)
+        LOGGER.info("Encoder backend set to '%s'", backend)
+        self._set_status(f"Encoder set to '{backend}' - it loads on the next run.")
+
+    def mark_for_review(self) -> None:
+        """Force the selected report into the review queue."""
+        row = self.dashboard.matrix_table.currentRow()
+        if row < 0 or row >= len(self.rows):
+            return
+        result = self.rows[row]
+        result["needs_review"] = True
+        result["review_trigger"] = result.get("review_trigger") or "Manual"
+        result["review_reason"] = result.get("review_reason") or "Flagged by the analyst"
+        LOGGER.info("Report %s marked for review by the analyst",
+                    result.get("reference") or row + 1)
+        self._refresh()
+
+    # -- settings actions --------------------------------------------------
+
+    def change_log_level(self, level: str) -> None:
+        """Change the runtime logging level."""
+        if level in LOG_LEVELS:
+            set_level(level)
+            LOGGER.info("Log level set to %s", level)
+            self._refresh_logs()
+
+    def clear_logs(self) -> None:
+        """Empty the in-memory log buffer (the file keeps its history)."""
+        self.ring.clear()
+        self.settings_view.set_log_rows([])
+
+    def change_tracking(self, uri: str, experiment: str) -> None:
+        """Point MLflow at a different store or experiment."""
+        self.mlops.tracker.tracking_uri = uri.strip() or self.mlops.tracker.tracking_uri
+        self.mlops.tracker.experiment = experiment.strip() or self.mlops.tracker.experiment
+        LOGGER.info("MLflow tracking set to %s (experiment '%s')",
+                    self.mlops.tracker.tracking_uri, self.mlops.tracker.experiment)
+        self._refresh_settings()
+
+    def change_ocr(self, enabled: bool, language: str) -> None:
+        """Rebuild the document extractor with new OCR settings."""
+        self.extractor = DocumentExtractor(language=language, enable_ocr=enabled)
+        LOGGER.info("OCR %s (language=%s)", "enabled" if enabled else "disabled", language)
+        self._check_ocr()
+
+    def train_model(self) -> None:
+        """Train the XGBoost model on the analysed corpus."""
+        results = self._as_results()
+        if len(results) < 4:
+            QMessageBox.information(
+                self, APP_NAME,
+                "Analyse at least four reports before training - the model needs both "
+                "SIF-potential and non-SIF examples.")
+            return
+        worker = TrainingWorker(self.mlops, results, parent=self)
+        worker.trained.connect(self.on_trained)
+        worker.failed.connect(self.on_failed)
+        self._start(worker, busy_message="Training XGBoost model...")
 
     # -- worker plumbing ---------------------------------------------------
 
-    def _start_worker(self, worker: AnalysisWorker) -> None:
-        """Wire a worker's signals to the GUI and start it."""
+    def _start(self, worker: QThread, busy_message: str = "Working...") -> None:
+        """Connect the common signals of a worker and start it."""
         if self.worker is not None and self.worker.isRunning():
-            QMessageBox.information(
-                self, APP_NAME, "An analysis run is already in progress. Please wait."
-            )
+            QMessageBox.information(self, APP_NAME,
+                                    "A background task is already running. Please wait.")
             return
-
         self.worker = worker
-        worker.row_ready.connect(self.on_row_ready)
-        worker.progress.connect(self.on_progress)
-        worker.status.connect(self.on_status)
-        worker.failed.connect(self.on_failed)
-        worker.completed.connect(self.on_completed)
+        if isinstance(worker, AnalysisWorker):
+            worker.row_ready.connect(self.on_row_ready)
+            worker.progress.connect(self.dashboard.set_progress)
+            worker.status.connect(self._set_status)
+            worker.failed.connect(self.on_failed)
+            worker.completed.connect(self.on_analysis_completed)
         worker.finished.connect(self._release_worker)
-
-        self._set_controls_enabled(False)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(True)
+        self.dashboard.set_busy(True)
+        self._set_status(busy_message)
         worker.start()
 
-    def on_row_ready(self, result: Dict[str, object]) -> None:
-        """Slot: append one streamed result to the matrix (GUI thread)."""
-        self.rows.append(result)
-        row_index = self.table.rowCount()
-        self.table.insertRow(row_index)
-
-        for column, (_, key, _) in enumerate(TABLE_COLUMNS):
-            item = QTableWidgetItem(self._cell_text(result, key, row_index + 1))
-            item.setToolTip(str(result.get("explanation", "")))
-            if key == "sif_potential":
-                is_sif = bool(result.get("sif_potential"))
-                item.setForeground(QColor(COLOR_DANGER if is_sif else COLOR_OK))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                font = QFont()
-                font.setBold(True)
-                item.setFont(font)
-            elif key in {"risk_band", "risk_score"}:
-                band = str(result.get("risk_band", "Low"))
-                item.setForeground(QColor(BAND_COLORS.get(band, COLOR_OK)))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            elif key == "review_trigger":
-                tone = COLOR_WARN if result.get("needs_review") else COLOR_MUTED
-                item.setForeground(QColor(tone))
-            elif key in {"_index", "reference", "p_sif"}:
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row_index, column, item)
-
-        self.table.scrollToBottom()
-        if len(self.rows) % self.PANEL_REFRESH_EVERY == 0:
-            self._refresh_panels()
-        else:
-            self.header.update_metrics(self._aggregate().kpis)
-
-    def on_progress(self, done: int, total: int) -> None:
-        """Slot: advance the progress bar."""
-        self.progress_bar.setMaximum(max(total, 1))
-        self.progress_bar.setValue(done)
-        self.statusBar().showMessage(f"Processing report {done} of {total}...")
-
-    def on_status(self, message: str) -> None:
-        """Slot: surface a stage message from the worker."""
-        self.statusBar().showMessage(message)
-
-    def on_failed(self, message: str) -> None:
-        """Slot: surface a worker-side error without killing the session."""
-        self.statusBar().showMessage("Analysis failed.", 6000)
-        QMessageBox.warning(self, APP_NAME, message)
-
-    def on_completed(self, count: int) -> None:
-        """Slot: final aggregation once a run finishes."""
-        intelligence = self._refresh_panels()
-        encoder = str(intelligence.kpis.get("encoder", ""))
-        self.statusBar().showMessage(
-            f"Completed - {count} report(s) this run  |  dashboard totals: "
-            f"{intelligence.kpis.get('total', 0)} processed, "
-            f"{intelligence.kpis.get('sif_potential', 0)} SIF-potential, "
-            f"{intelligence.kpis.get('needs_review', 0)} awaiting review  |  {encoder}",
-            15000,
-        )
-
-    def on_row_selected(self) -> None:
-        """Slot: render the evidence trail for the selected incident."""
-        rows = {index.row() for index in self.table.selectedIndexes()}
-        if not rows:
-            return
-        position = min(rows)
-        if position >= len(self.rows):
-            return
-        result = self.rows[position]
-        evidence = result.get("evidence", {}) or {}
-        cues = "; ".join(evidence.get("lexical_cues", [])) or "none"
-        semantic = ", ".join(
-            f"{field} -> {label} ({score:.2f})"
-            for field, (label, score) in (evidence.get("semantic_matches", {}) or {}).items()
-        ) or "none"
-        risk = evidence.get("risk", {}) or {}
-        self.evidence_box.setHtml(
-            f"<b>{result.get('explanation', '')}</b><br/>"
-            f"<span style='color:{COLOR_MUTED}'>Decision path:</span> "
-            f"{evidence.get('decision_path', '')}<br/>"
-            f"<span style='color:{COLOR_MUTED}'>Risk:</span> "
-            f"{result.get('risk_score', 0)}/100 ({result.get('risk_band', '')}) = "
-            f"{risk.get('rationale', '')}<br/>"
-            f"<span style='color:{COLOR_MUTED}'>Lexical cues:</span> {cues}<br/>"
-            f"<span style='color:{COLOR_MUTED}'>Nearest semantic prototypes:</span> {semantic}"
-        )
-
     def _release_worker(self) -> None:
-        """Slot: re-enable controls when the thread's event loop exits."""
-        self.progress_bar.setVisible(False)
-        self._set_controls_enabled(True)
+        self.dashboard.set_busy(False)
         self.worker = None
 
-    # -- panels ------------------------------------------------------------
+    def on_row_ready(self, payload: Dict[str, object]) -> None:
+        """Slot: one analysed report arrived."""
+        self.rows.append(payload)
+        self.dashboard.matrix_table.append_row(payload)
+        self.dashboard.matrix_table.scrollToBottom()
+        if len(self.rows) % 5 == 0:
+            self._refresh()
 
-    def _aggregate(self):
-        """Re-run corpus-level aggregation over the rows collected so far."""
-        from sif.pipeline import PipelineResult
+    def on_analysis_completed(self, count: int) -> None:
+        """Slot: a batch finished."""
+        self.last_run_count = count
+        intelligence = self._refresh()
+        LOGGER.info("Analysed %d report(s); %s SIF-potential, %s awaiting review", count,
+                    intelligence.kpis.get("sif_potential"), intelligence.kpis.get("needs_review"))
+        self._set_status(
+            f"Completed {count} report(s)  ·  {intelligence.kpis.get('sif_potential', 0)} "
+            f"SIF-potential  ·  {intelligence.kpis.get('needs_review', 0)} for review  ·  "
+            f"{intelligence.kpis.get('encoder', '')}")
 
-        results = []
-        for row in self.rows:
-            payload = {key: value for key, value in row.items()
-                       if key in PipelineResult.__dataclass_fields__}
-            results.append(PipelineResult(**payload))
-        return self.pipeline.aggregate(results)
+    def on_document_ready(self, payload: Dict[str, object]) -> None:
+        """Slot: one document was extracted."""
+        text = str(payload.pop("text", ""))
+        self.documents.append(payload)
+        self.batch_view.set_documents(self.documents)
+        if text.strip():
+            blocks = [block.strip() for block in text.split("\n\n")
+                      if len(block.strip()) > 25] or [text.strip()]
+            self.pending_blocks.extend(blocks)
+            self.batch_view.set_preview(text[:6000])
+        self._set_status(f"{payload['name']} read via {payload['backend']}")
 
-    def _refresh_panels(self):
-        """Recompute the KPI header, hotspot table and review queue."""
-        intelligence = self._aggregate()
-        self.header.update_metrics(intelligence.kpis)
-        self._fill_table(self.hotspot_table, HOTSPOT_COLUMNS,
-                         [spot.to_dict() for spot in intelligence.hotspots])
-        self._fill_table(self.review_table, REVIEW_COLUMNS,
-                         [item.to_dict() for item in intelligence.review_queue])
-        self.tabs.setTabText(1, f"Risk Hotspots ({len(intelligence.hotspots)})")
-        self.tabs.setTabText(2, f"Human Review Queue ({len(intelligence.review_queue)})")
+    def on_trained(self, report: Dict[str, object]) -> None:
+        """Slot: training finished."""
+        self.pipeline.attach_model(self.mlops)
+        metrics = " ".join(f"{key}={value:.3f}"
+                           for key, value in sorted(report.get("metrics", {}).items()))
+        run = report.get("run_id") or "not tracked"
+        warnings = report.get("warnings") or []
+        self._refresh_settings()
+        self._refresh()
+        message = (f"Trained on {report.get('samples')} reports "
+                   f"({report.get('positives')} positive)  ·  {metrics}  ·  run {run[:8]}")
+        self._set_status(message)
+        if warnings:
+            QMessageBox.information(self, APP_NAME, message + "\n\n" + "\n".join(warnings))
+
+    def on_failed(self, message: str) -> None:
+        """Slot: a worker reported an error."""
+        LOGGER.error("%s", message)
+        self._set_status("Task failed - see the Settings log for detail.")
+        QMessageBox.warning(self, APP_NAME, message)
+
+    def select_row(self, row: int) -> None:
+        """Slot: a matrix row was selected."""
+        if 0 <= row < len(self.rows):
+            self.dashboard.show_detail(self.rows[row])
+
+    # -- rendering ---------------------------------------------------------
+
+    def _as_results(self) -> List[PipelineResult]:
+        """Rebuild dataclass results from the stored row dictionaries."""
+        fields = PipelineResult.__dataclass_fields__
+        return [PipelineResult(**{key: value for key, value in row.items() if key in fields})
+                for row in self.rows]
+
+    def _refresh(self):
+        """Recompute aggregates and repaint every view."""
+        results = self._as_results()
+        intelligence = self.pipeline.aggregate(results)
+        kpis = dict(intelligence.kpis)
+        kpis["run_count"] = self.last_run_count
+        kpis["model_agreement"] = self._model_agreement(results)
+
+        self.dashboard.update_kpis(kpis)
+        self.dashboard.update_charts(*self._chart_data(results))
+        self.dashboard.update_tabs(len(intelligence.hotspots), len(intelligence.review_queue))
+        hotspots = [spot.to_dict() for spot in intelligence.hotspots]
+        review = [item.to_dict() for item in intelligence.review_queue]
+        self.dashboard.hotspot_table.set_rows(hotspots)
+        self.dashboard.review_table.set_rows(review)
+        self.matrix_view.set_rows(self.rows)
+        self.hotspot_view.set_rows(hotspots)
+        self.review_view.set_rows(review)
+        self.sidebar.set_badge("review", len(review))
+
+        rules, energies, barriers = self._chart_data(results)
+        self.analytics_view.update_charts(rules, energies, barriers,
+                                          self._activity_data(results))
+        report = self.mlops.last_report
+        self.analytics_view.update_model(
+            self._model_summary(), report.importances if report else [])
         return intelligence
 
-    def _fill_table(self, table: QTableWidget, columns: Sequence[tuple],
-                    payloads: Sequence[Dict[str, object]]) -> None:
-        """Replace a table's contents with ``payloads``."""
-        table.setRowCount(0)
-        for payload in payloads:
-            row_index = table.rowCount()
-            table.insertRow(row_index)
-            for column, (_, key, _) in enumerate(columns):
-                value = payload.get(key, "")
-                if isinstance(value, bool):
-                    text = "YES" if value else "no"
-                elif isinstance(value, float):
-                    text = f"{value:.1f}"
-                else:
-                    text = str(value)
-                item = QTableWidgetItem(text)
-                if key in {"reports", "sif_reports", "sif_rate", "mean_risk", "max_risk",
-                           "risk_score", "sif_potential", "reference"}:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if key in {"mean_risk", "max_risk", "risk_score"}:
-                    numeric = float(value or 0.0)
-                    band = ("Critical" if numeric >= 70 else "High" if numeric >= 50
-                            else "Medium" if numeric >= 30 else "Low")
-                    item.setForeground(QColor(BAND_COLORS[band]))
-                if key == "trigger":
-                    item.setForeground(QColor(COLOR_WARN))
-                table.setItem(row_index, column, item)
-
-    # -- small helpers -----------------------------------------------------
-
-    def _set_controls_enabled(self, enabled: bool) -> None:
-        for widget in (self.process_button, self.import_button, self.seed_button,
-                       self.clear_button, self.encoder_box):
-            widget.setEnabled(enabled)
+    @staticmethod
+    def _model_agreement(results: Sequence[PipelineResult]) -> Optional[float]:
+        """Percentage of scored reports where the model agrees with the pipeline."""
+        scored = [item for item in results if item.ml_active]
+        if not scored:
+            return None
+        agree = sum(1 for item in scored if item.ml_flag == item.sif_potential)
+        return agree / len(scored) * 100.0
 
     @staticmethod
-    def _cell_text(result: Dict[str, object], key: str, index: int) -> str:
-        """Render one result field as display text."""
-        if key == "_index":
-            return str(index)
-        if key == "sif_potential":
-            return "YES" if result.get("sif_potential") else "no"
-        if key in {"p_sif", "confidence"}:
-            return f"{float(result.get(key, 0.0)):.2f}"
-        if key == "risk_score":
-            return f"{float(result.get(key, 0.0)):.0f}"
-        if key == "review_trigger":
-            return str(result.get(key, "") or "-")
-        if key == "reference":
-            return str(result.get(key, "") or "-")
-        if key == "raw_text":
-            text = str(result.get("raw_text", ""))
-            return text if len(text) <= 300 else text[:297] + "..."
-        return str(result.get(key, ""))
+    def _chart_data(results: Sequence[PipelineResult]):
+        """Build (rule bars, energy slices, barrier bars) from the corpus."""
+        rule_total: Counter = Counter()
+        rule_sif: Counter = Counter()
+        energies: Counter = Counter()
+        barrier_total: Counter = Counter()
+        barrier_sif: Counter = Counter()
+
+        for item in results:
+            rule_total[item.iogp_rule] += 1
+            if item.sif_potential:
+                rule_sif[item.iogp_rule] += 1
+            if item.high_energy:
+                for part in item.energy_source.split(" + "):
+                    energies[part.strip()] += 1
+            if item.barrier_failed:
+                for part in item.barrier_failure.split(";"):
+                    label = part.strip()
+                    if not label:
+                        continue
+                    barrier_total[label] += 1
+                    if item.sif_potential:
+                        barrier_sif[label] += 1
+
+        rules = [(label, count, rule_sif.get(label, 0))
+                 for label, count in rule_total.most_common(10)]
+        barriers = [(label, count, barrier_sif.get(label, 0))
+                    for label, count in barrier_total.most_common(10)]
+        return rules, energies.most_common(9), barriers
+
+    @staticmethod
+    def _activity_data(results: Sequence[PipelineResult]):
+        """Activities ranked by how often they appear, SIF share highlighted."""
+        total: Counter = Counter()
+        flagged: Counter = Counter()
+        for item in results:
+            total[item.activity] += 1
+            if item.sif_potential:
+                flagged[item.activity] += 1
+        return [(label, count, flagged.get(label, 0)) for label, count in total.most_common(12)]
+
+    def _model_summary(self) -> str:
+        status = self.mlops.status()
+        report = self.mlops.last_report
+        if report is None:
+            return f"Model: {status['model']}. {status['tracking']}"
+        return (f"Model: {status['model']}  |  labels: {report.label_source}  |  "
+                f"MLflow run {report.run_id[:8] or 'not tracked'}. "
+                + (" ".join(report.warnings) if report.warnings else ""))
+
+    def _refresh_settings(self) -> None:
+        status = self.mlops.status()
+        self.settings_view.set_model_status(status["model"], status["tracking"])
+        self.settings_view.set_log_path(active_log_file() or log_file_path())
+        self.settings_view.set_runs(self.mlops.tracker.recent_runs(10))
+        report = self.mlops.last_report
+        self.settings_view.set_importances(report.importances if report else [])
+        self.settings_view.set_ocr_status(self.extractor.status())
+        self.batch_view.set_status(self.extractor.status())
+
+    def _check_ocr(self) -> None:
+        """Actually load the OCR engine and report what happened."""
+        self.settings_view.set_ocr_status("Checking OCR - loading models, this may download...")
+        worker = OCRProbeWorker(self.extractor, parent=self)
+        worker.probed.connect(self._on_ocr_probed)
+        self._start(worker, busy_message="Checking OCR availability...")
+
+    def _on_ocr_probed(self, ok: bool, message: str) -> None:
+        """Slot: the OCR probe finished."""
+        text = message if ok else f"OCR unavailable - {message}"
+        self.settings_view.set_ocr_status(text)
+        self.batch_view.set_status(text)
+        self._set_status("OCR ready" if ok else "OCR unavailable - see Settings")
+
+    def _refresh_logs(self) -> None:
+        """Pull recent log lines into the Settings table."""
+        if self.pages.currentWidget() is not self.settings_view:
+            return
+        level = self.settings_view.level_box.currentText()
+        rows = [{"timestamp": entry.timestamp, "level": entry.level,
+                 "logger": entry.logger, "message": entry.message}
+                for entry in self.ring.entries(level, limit=400)]
+        self.settings_view.set_log_rows(rows)
+
+    def _apply_filter(self, text: str) -> None:
+        """Filter the incident matrix from the header search box."""
+        needle = (text or "").strip().lower()
+        table = self.matrix_view.table
+        for row in range(table.rowCount()):
+            haystack = " ".join(
+                table.item(row, column).text().lower()
+                for column in range(table.columnCount()) if table.item(row, column))
+            table.setRowHidden(row, bool(needle) and needle not in haystack)
+
+    def _set_status(self, message: str) -> None:
+        self.status_label.setText(message)
 
     # -- Qt lifecycle ------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Stop any running worker cleanly before the window closes."""
+        """Stop timers and any running worker before closing."""
+        self.log_timer.stop()
         if self.worker is not None and self.worker.isRunning():
             self.worker.requestInterruption()
             self.worker.wait(3000)
+        LOGGER.info("%s closing", APP_NAME)
         super().closeEvent(event)
 
 

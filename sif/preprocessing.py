@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Pattern, Tuple
+from typing import Dict, List, Pattern
 
 __all__ = ["Document", "NLPPreprocessor", "ABBREVIATIONS"]
 

@@ -16,6 +16,11 @@ Four triggers, in priority order:
 3. **Thin evidence** - the classification rests on very little extracted text.
 4. **Unclassified with energy** - high energy present but no rule matched, which
    usually means vocabulary the system has never seen.
+
+When a trained XGBoost model is attached (see :mod:`sif.mlops`), its verdict is a
+third opinion: where it contradicts the pipeline, the report is queued as a
+**model disagreement**. Those are the highest-value rows to label, because each
+one either corrects the rules or corrects the model.
 """
 
 from __future__ import annotations
@@ -28,8 +33,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["ReviewItem", "ReviewQueue"]
 
-PRIORITY_ORDER = {"Disagreement": 0, "Critical risk": 1, "Thin evidence": 2,
-                  "Unclassified exposure": 3}
+PRIORITY_ORDER = {"Disagreement": 0, "Model disagreement": 1, "Critical risk": 2,
+                  "Thin evidence": 3, "Unclassified exposure": 4}
 
 
 @dataclass
@@ -90,6 +95,11 @@ class ReviewQueue:
             return "Disagreement", (
                 f"{agree} flagged SIF potential, {disagree} did not "
                 f"(P(SIF) {result.p_sif:.2f})")
+        if result.ml_active and result.ml_flag != result.sif_potential:
+            direction = "above" if result.ml_flag else "below"
+            return "Model disagreement", (
+                f"the trained model puts P(SIF) at {result.ml_probability:.2f}, "
+                f"{direction} the pipeline verdict - check which is right and label it")
         if result.risk_band == ReviewQueue.CRITICAL_BAND:
             return "Critical risk", (
                 f"risk {result.risk_score:.0f}/100 - verify before it drives an intervention")

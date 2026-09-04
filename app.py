@@ -9,17 +9,22 @@ Run with::
 Module map
 ----------
 ``sif/``
-    The analysis pipeline, independent of Qt:
+    The analysis stack, independent of Qt:
+    ``ocr`` (read PDFs, scans and photographs) ->
     ``preprocessing`` (clean, expand abbreviations, segment) ->
     ``encoders`` (transformer sentence embeddings, offline fallback) ->
     ``heads`` (SIF classifier, IOGP rule classifier, entity extraction) ->
     ``evidence`` -> ``scoring`` -> ``patterns`` / ``review``, orchestrated by
-    ``pipeline.SIFPipeline``. ``lexical`` holds the deterministic rule layer that
-    every stage is anchored to.
+    ``pipeline.SIFPipeline``. ``lexical`` holds the deterministic rule layer every
+    stage is anchored to, ``mlops`` adds the XGBoost model with MLflow tracking,
+    and ``logging_setup`` provides the audit trail shown in Settings.
+``ui/``
+    Presentation only: ``theme`` (palette and style sheet), ``charts`` (painted
+    bar and donut widgets), ``components`` (KPI tiles, panels, tables, sidebar)
+    and ``views`` (the pages).
 ``main.py``
-    PyQt6 presentation layer: control panel, KPI dashboard, incident matrix,
-    hotspot and review panels, and the :class:`~main.AnalysisWorker` ``QThread``
-    that keeps the UI responsive while the model loads and runs.
+    The controller: owns the pipeline, MLOps service and document extractor, runs
+    them on ``QThread`` workers, and pushes results into the views.
 ``app.py``
     This launcher: environment checks, application bootstrap, event loop.
 
@@ -33,6 +38,10 @@ changes::
 
 ``auto`` uses the transformer when it can be loaded and otherwise falls back to
 the offline lexical engine, so the application always starts.
+
+Optional components (XGBoost, MLflow, PaddleOCR) are all detected at run time;
+the Settings tab reports which are available and why, and the console works
+without any of them.
 """
 
 from __future__ import annotations

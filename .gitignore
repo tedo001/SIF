@@ -7,3 +7,8 @@ sif_results.csv
 .pytest_cache/
 .idea/
 .vscode/
+logs/
+models/
+mlruns/
+mlartifacts/
+mlflow.db

@@ -10,7 +10,7 @@ structure, and renders the one-line explanation shown in the UI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .heads import Entities, RuleVerdict, SIFVerdict
 from .lexical import SIFAssessment

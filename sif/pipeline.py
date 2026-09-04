@@ -30,7 +30,7 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 from .encoders import SemanticEncoder, load_encoder
-from .evidence import Evidence, EvidenceEngine
+from .evidence import EvidenceEngine
 from .heads import EntityExtractor, RuleClassifier, SIFClassifier, SemanticIndex
 from .lexical import LexicalEngine, SEED_REPORTS
 from .patterns import Hotspot, PatternDetector
@@ -68,6 +68,9 @@ class PipelineResult:
     lexical_flag: bool = False
     semantic_flag: bool = False
     semantic_active: bool = False
+    ml_probability: Optional[float] = None
+    ml_flag: bool = False
+    ml_active: bool = False
     needs_review: bool = False
     review_trigger: str = ""
     review_reason: str = ""
@@ -117,11 +120,15 @@ class SIFPipeline:
     """
 
     def __init__(self, encoder: Optional[SemanticEncoder] = None, backend: str = "auto",
-                 model_name: Optional[str] = None) -> None:
+                 model_name: Optional[str] = None, model_provider: object = None) -> None:
         self._encoder = encoder
         self._backend = backend
         self._model_name = model_name
         self._index: Optional[SemanticIndex] = None
+        # Duck-typed: anything with .predict(result) -> Optional[float]. Kept
+        # untyped so the learned layer stays optional and this module never has
+        # to import xgboost.
+        self._model_provider = model_provider
 
         self.preprocessor = NLPPreprocessor()
         self.lexical = LexicalEngine()
@@ -159,6 +166,20 @@ class SIFPipeline:
         """
         self.index.build()
         return self.encoder.info.label()
+
+    def attach_model(self, provider: object) -> None:
+        """Attach a trained model (see :class:`sif.mlops.MLOpsService`).
+
+        The provider only has to expose ``predict(result) -> float | None``; the
+        pipeline treats it as a third opinion alongside the rules and the
+        encoder, never as an override.
+        """
+        self._model_provider = provider
+
+    @property
+    def has_model(self) -> bool:
+        """True when a learned model is attached."""
+        return self._model_provider is not None
 
     # -- analysis ----------------------------------------------------------
 
@@ -213,6 +234,7 @@ class SIFPipeline:
             evidence={**evidence.to_dict(), "risk": risk.to_dict()},
             raw_text=document.raw,
         )
+        self._apply_model(result)
         trigger, reason = self.reviewer.classify(result)
         result.needs_review = trigger is not None
         result.review_trigger = trigger or ""
@@ -229,6 +251,21 @@ class SIFPipeline:
             reference = references[position] if references and position < len(references) else ""
             results.append(self.analyze(text, reference))
         return results
+
+    def _apply_model(self, result: PipelineResult) -> None:
+        """Score the result with the learned model, when one is attached."""
+        if self._model_provider is None:
+            return
+        probability = self._model_provider.predict(result)
+        if probability is None:
+            return
+        result.ml_probability = round(float(probability), 3)
+        result.ml_flag = result.ml_probability >= 0.5
+        result.ml_active = True
+        result.evidence["model"] = {
+            "probability": result.ml_probability,
+            "agrees": result.ml_flag == result.sif_potential,
+        }
 
     # -- corpus level ------------------------------------------------------
 
