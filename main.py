@@ -1,24 +1,28 @@
 """PyQt6 desktop interface for the SIF Insight Console.
 
-Oil India Limited - Problem Statement 26165
-"Prediction and prevention of Serious Injury and Fatality (SIF) events from
-UA/UC and near-miss reporting."
+Oil India Limited - Problem Statement 26165.
+
+The window is the last stage of the pipeline in :mod:`sif.pipeline`: it drives
+the analysis from a worker thread and renders what comes back as HSE
+intelligence.
 
 Layout
 ------
 +----------------------------+------------------------------------------------+
 | LEFT  - Control panel      | RIGHT - Analytics dashboard                    |
-|  * free-text ingestion box |  * KPI header (processed, SIF count, % SIF)    |
-|  * Process Text            |  * live results matrix (QTableWidget)          |
+|  * free-text ingestion box |  * KPI header (processed, SIF, % SIF, risk)    |
+|  * encoder selector        |  * Incident matrix / Risk hotspots / Review    |
+|  * Process Text            |  * evidence pane for the selected report       |
 |  * Batch Import CSV        |                                                |
 +----------------------------+------------------------------------------------+
 
 Concurrency
 -----------
-Every parsing and file-reading operation runs inside :class:`AnalysisWorker`,
-a ``QThread`` subclass.  Results are streamed back one row at a time through
-``pyqtSignal`` connections, so the Qt event loop never blocks and the table
-fills in progressively even for large CSV batches.
+Model loading, CSV reading and every pipeline stage run inside
+:class:`AnalysisWorker`, a ``QThread``. Results are streamed back one row at a
+time through ``pyqtSignal`` connections, so the Qt event loop never blocks -
+including during the first-run model download, which reports progress through
+the status bar instead of freezing the window.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from PyQt6.QtGui import QAction, QColor, QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -48,31 +53,56 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from sif_engine import CSV_TEXT_COLUMNS, SEED_REPORTS, SIFEngine
+from sif import SEED_REPORTS, SIFPipeline
+from sif.lexical import CSV_TEXT_COLUMNS
 
 __all__ = ["AnalysisWorker", "MetricCard", "DashboardHeader", "MainWindow"]
 
 APP_NAME = "SIF Insight Console"
 APP_SUBTITLE = "Oil India Limited | PS 26165 - UA/UC & Near-Miss Intelligence"
 
-#: Dashboard table schema: (header label, assessment key, column width hint).
+#: Incident matrix schema: (header label, result key, column width hint).
 TABLE_COLUMNS: Sequence[tuple] = (
-    ("#", "_index", 48),
-    ("Timestamp", "_timestamp", 105),
-    ("SIF", "sif_potential", 70),
-    ("IOGP Rule", "iogp_rule", 190),
-    ("Activity", "activity", 200),
-    ("Location", "location", 190),
-    ("Barrier Failure", "barrier_failure", 300),
-    ("Energy Source", "energy_source", 220),
-    ("Severity", "severity_hint", 90),
-    ("Conf.", "confidence", 70),
-    ("Source Narrative", "raw_text", 460),
+    ("#", "_index", 42),
+    ("Ref", "reference", 74),
+    ("SIF", "sif_potential", 54),
+    ("P(SIF)", "p_sif", 56),
+    ("Risk", "risk_score", 52),
+    ("Band", "risk_band", 66),
+    ("IOGP Rule", "iogp_rule", 168),
+    ("Activity", "activity", 158),
+    ("Location", "location", 158),
+    ("Barrier Failure", "barrier_failure", 250),
+    ("Energy Source", "energy_source", 180),
+    ("Review", "review_trigger", 104),
+    ("Source Narrative", "raw_text", 360),
+)
+
+HOTSPOT_COLUMNS: Sequence[tuple] = (
+    ("Type", "kind", 150),
+    ("Cluster", "label", 320),
+    ("Reports", "reports", 76),
+    ("SIF", "sif_reports", 60),
+    ("SIF %", "sif_rate", 66),
+    ("Mean risk", "mean_risk", 84),
+    ("Peak risk", "max_risk", 84),
+    ("Dominant rule", "top_rule", 190),
+    ("Dominant barrier", "top_barrier", 260),
+)
+
+REVIEW_COLUMNS: Sequence[tuple] = (
+    ("Trigger", "trigger", 150),
+    ("Ref", "reference", 74),
+    ("Risk", "risk_score", 60),
+    ("SIF", "sif_potential", 54),
+    ("Why a human is needed", "reason", 380),
+    ("Report", "summary", 460),
 )
 
 # Palette -- a single place to retune the visual identity.
@@ -85,6 +115,10 @@ COLOR_MUTED = "#8ba0b5"
 COLOR_DANGER = "#ff5c5c"
 COLOR_WARN = "#f4b942"
 COLOR_OK = "#4cc38a"
+
+#: Risk band -> colour, shared by the matrix and the review queue.
+BAND_COLORS = {"Critical": COLOR_DANGER, "High": "#ff9152",
+               "Medium": COLOR_WARN, "Low": COLOR_OK}
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -114,6 +148,17 @@ QTextEdit {{
     border-radius: 8px;
     padding: 8px;
     selection-background-color: {COLOR_ACCENT};
+}}
+QComboBox {{
+    background-color: {COLOR_CARD};
+    border: 1px solid #33506b;
+    border-radius: 8px;
+    padding: 6px 10px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {COLOR_CARD};
+    selection-background-color: #1f4a55;
+    border: 1px solid #33506b;
 }}
 QPushButton {{
     background-color: {COLOR_CARD};
@@ -148,6 +193,18 @@ QHeaderView::section {{
     border-right: 1px solid #24354a;
     font-weight: 600;
 }}
+QTabWidget::pane {{ border: 1px solid #24354a; border-radius: 8px; top: -1px; }}
+QTabBar::tab {{
+    background: {COLOR_CARD};
+    color: {COLOR_MUTED};
+    padding: 7px 16px;
+    border: 1px solid #24354a;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    margin-right: 3px;
+}}
+QTabBar::tab:selected {{ color: {COLOR_TEXT}; background: {COLOR_PANEL}; }}
 QProgressBar {{
     background-color: #101a25;
     border: 1px solid #2b3d52;
@@ -166,66 +223,78 @@ QStatusBar {{ color: {COLOR_MUTED}; border-top: 1px solid #24354a; }}
 
 
 class AnalysisWorker(QThread):
-    """Background thread that parses reports and streams rows to the GUI.
+    """Background thread that runs the pipeline and streams rows to the GUI.
 
     The worker accepts either an in-memory list of narratives or a CSV path.
-    File I/O and parsing both happen inside :meth:`run`, i.e. off the GUI
-    thread, and each finished row is emitted immediately rather than being
-    batched, so the dashboard updates in real time.
+    Encoder loading, file I/O and every pipeline stage happen inside :meth:`run`,
+    i.e. off the GUI thread, and each finished row is emitted immediately rather
+    than being batched, so the dashboard updates in real time.
 
     Signals
     -------
     row_ready(dict)
-        One completed assessment dictionary (see :class:`sif_engine.SIFAssessment`).
+        One completed :class:`~sif.pipeline.PipelineResult` as a dictionary.
     progress(int, int)
         ``(completed, total)`` counters for the progress bar.
+    status(str)
+        Human-readable stage message ("loading encoder", "encoder ready: ...").
     failed(str)
-        Human-readable error message; the run is aborted after this.
+        Error message; the run is aborted after this.
     completed(int)
         Number of rows successfully emitted once the run finishes.
     """
 
     row_ready = pyqtSignal(dict)
     progress = pyqtSignal(int, int)
+    status = pyqtSignal(str)
     failed = pyqtSignal(str)
     completed = pyqtSignal(int)
 
     #: Delay between rows (ms) so batch streaming is visible during a demo.
-    STREAM_DELAY_MS = 40
+    STREAM_DELAY_MS = 30
 
     def __init__(
         self,
-        engine: SIFEngine,
+        pipeline: SIFPipeline,
         texts: Optional[Sequence[str]] = None,
         csv_path: Optional[str] = None,
+        references: Optional[Sequence[str]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._engine = engine
+        self._pipeline = pipeline
         self._texts: List[str] = list(texts or [])
+        self._references: List[str] = list(references or [])
         self._csv_path = csv_path
 
     # -- QThread entry point ----------------------------------------------
 
     def run(self) -> None:  # noqa: D102 - documented in the class docstring
         try:
-            texts = self._texts
+            texts, references = self._texts, self._references
             if self._csv_path:
-                texts = self._read_csv(self._csv_path)
+                self.status.emit("Reading CSV...")
+                texts, references = self._read_csv(self._csv_path)
 
-            texts = [item.strip() for item in texts if isinstance(item, str) and item.strip()]
-            total = len(texts)
-            if total == 0:
+            pairs = [(text.strip(), references[index] if index < len(references) else "")
+                     for index, text in enumerate(texts)
+                     if isinstance(text, str) and text.strip()]
+            if not pairs:
                 self.failed.emit("No usable report text was found in the input.")
                 return
 
+            self.status.emit("Loading semantic encoder (first run may download the model)...")
+            self.status.emit(f"Encoder ready - {self._pipeline.warm_up()}")
+
+            total = len(pairs)
             emitted = 0
-            for index, narrative in enumerate(texts, start=1):
+            for index, (narrative, reference) in enumerate(pairs, start=1):
                 if self.isInterruptionRequested():
                     break
-                result = self._engine.analyze(narrative)
-                result["_timestamp"] = datetime.now().strftime("%H:%M:%S")
-                self.row_ready.emit(result)
+                result = self._pipeline.analyze(narrative, reference)
+                payload = result.to_dict()
+                payload["_timestamp"] = datetime.now().strftime("%H:%M:%S")
+                self.row_ready.emit(payload)
                 emitted += 1
                 self.progress.emit(index, total)
                 if self.STREAM_DELAY_MS:
@@ -238,11 +307,11 @@ class AnalysisWorker(QThread):
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
-    def _read_csv(path: str) -> List[str]:
-        """Extract narratives from a CSV file.
+    def _read_csv(path: str):
+        """Extract narratives (and references, when present) from a CSV file.
 
         Recognises the common column names listed in
-        :data:`sif_engine.CSV_TEXT_COLUMNS`.  If none is present, the longest
+        :data:`sif.lexical.CSV_TEXT_COLUMNS`. If none is present, the longest
         text cell in each row is used, which keeps the importer usable with
         arbitrary contractor-supplied exports.
         """
@@ -250,6 +319,7 @@ class AnalysisWorker(QThread):
             raise FileNotFoundError(f"CSV file not found: {path}")
 
         narratives: List[str] = []
+        references: List[str] = []
         with open(path, "r", encoding="utf-8-sig", newline="") as handle:
             sample = handle.read(4096)
             handle.seek(0)
@@ -260,22 +330,25 @@ class AnalysisWorker(QThread):
 
             reader = csv.DictReader(handle, dialect=dialect)
             if reader.fieldnames:
-                lookup = {
-                    (name or "").strip().lower(): name for name in reader.fieldnames
-                }
+                lookup = {(name or "").strip().lower(): name for name in reader.fieldnames}
                 target = next((lookup[key] for key in CSV_TEXT_COLUMNS if key in lookup), None)
+                ref_key = next((lookup[key] for key in ("report_id", "id", "ref", "reference")
+                                if key in lookup), None)
                 for row in reader:
                     if target and row.get(target):
                         narratives.append(str(row[target]))
                     else:
                         values = [str(value) for value in row.values() if value]
-                        if values:
-                            narratives.append(max(values, key=len))
+                        if not values:
+                            continue
+                        narratives.append(max(values, key=len))
+                    references.append(str(row.get(ref_key, "")) if ref_key else "")
             else:  # Header-less file: treat every line as one narrative.
                 handle.seek(0)
                 narratives = [line.strip() for line in handle if line.strip()]
+                references = [""] * len(narratives)
 
-        return narratives
+        return narratives, references
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +384,7 @@ class MetricCard(QFrame):
 
 
 class DashboardHeader(QFrame):
-    """Header strip holding the four headline SIF metrics."""
+    """Header strip holding the headline SIF metrics."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -320,23 +393,38 @@ class DashboardHeader(QFrame):
         self.total_card = MetricCard("Total Processed", "0", COLOR_TEXT)
         self.sif_card = MetricCard("SIF-Potential Events", "0", COLOR_DANGER)
         self.rate_card = MetricCard("% SIF-Potential", "0.0%", COLOR_WARN)
-        self.rule_card = MetricCard("Top IOGP Exposure", "-", COLOR_ACCENT)
+        self.risk_card = MetricCard("Mean Risk Score", "0.0", COLOR_ACCENT)
+        self.review_card = MetricCard("Awaiting Human Review", "0", COLOR_TEXT)
 
         layout = QGridLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
-        layout.addWidget(self.total_card, 0, 0)
-        layout.addWidget(self.sif_card, 0, 1)
-        layout.addWidget(self.rate_card, 0, 2)
-        layout.addWidget(self.rule_card, 0, 3)
+        for column, card in enumerate((self.total_card, self.sif_card, self.rate_card,
+                                       self.risk_card, self.review_card)):
+            layout.addWidget(card, 0, column)
 
-    def update_metrics(self, total: int, sif_count: int, top_rule: str) -> None:
-        """Refresh all KPI tiles from the current dashboard state."""
-        rate = (sif_count / total * 100.0) if total else 0.0
-        self.total_card.set_value(str(total))
-        self.sif_card.set_value(str(sif_count))
-        self.rate_card.set_value(f"{rate:.1f}%")
-        self.rule_card.set_value(top_rule or "-")
+    def update_metrics(self, kpis: Dict[str, object]) -> None:
+        """Refresh all KPI tiles from the pipeline's aggregate."""
+        self.total_card.set_value(str(kpis.get("total", 0)))
+        self.sif_card.set_value(str(kpis.get("sif_potential", 0)))
+        self.rate_card.set_value(f'{float(kpis.get("sif_rate", 0.0)):.1f}%')
+        self.risk_card.set_value(f'{float(kpis.get("mean_risk", 0.0)):.1f}')
+        self.review_card.set_value(str(kpis.get("needs_review", 0)))
+
+
+def _make_table(columns: Sequence[tuple]) -> QTableWidget:
+    """Build a read-only, row-selecting table with the given column schema."""
+    table = QTableWidget(0, len(columns))
+    table.setHorizontalHeaderLabels([label for label, _, _ in columns])
+    table.setAlternatingRowColors(True)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.verticalHeader().setVisible(False)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    table.horizontalHeader().setStretchLastSection(True)
+    for column, (_, _, width) in enumerate(columns):
+        table.setColumnWidth(column, width)
+    return table
 
 
 # ---------------------------------------------------------------------------
@@ -347,20 +435,26 @@ class DashboardHeader(QFrame):
 class MainWindow(QMainWindow):
     """Two-pane console: ingestion controls on the left, analytics on the right."""
 
+    #: Hotspots and the review queue are recomputed every N streamed rows.
+    PANEL_REFRESH_EVERY = 5
+
     def __init__(self) -> None:
         super().__init__()
-        self.engine = SIFEngine()
+        self.pipeline = SIFPipeline()
         self.worker: Optional[AnalysisWorker] = None
         self.rows: List[Dict[str, object]] = []
 
         self.setWindowTitle(APP_NAME)
-        self.resize(1500, 860)
+        self.resize(1560, 900)
         self.setStyleSheet(STYLESHEET)
 
         self._build_menu()
         self._build_ui()
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Ready - paste a report or load the seed incidents.")
+        self.statusBar().showMessage(
+            "Ready - paste a report or load the seed incidents. The encoder loads on "
+            "the first run."
+        )
 
     # -- construction ------------------------------------------------------
 
@@ -391,7 +485,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_dashboard())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([430, 1070])
+        splitter.setSizes([430, 1130])
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -400,10 +494,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _build_control_panel(self) -> QWidget:
-        """Left pane: title, text ingestion box and action buttons."""
+        """Left pane: title, encoder selector, ingestion box and action buttons."""
         panel = QFrame()
         panel.setObjectName("Panel")
-        panel.setMinimumWidth(380)
+        panel.setMinimumWidth(390)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -419,19 +513,27 @@ class MainWindow(QMainWindow):
         section.setObjectName("SectionTitle")
 
         hint = QLabel(
-            "Paste one UA/UC or near-miss narrative per blank-line-separated "
-            "block. The engine extracts the IOGP rule, activity, location and "
-            "failed barrier, then flags SIF potential."
+            "Paste one UA/UC or near-miss narrative per blank-line-separated block. "
+            "The pipeline classifies SIF potential and the IOGP rule, extracts the "
+            "activity, location and failed barrier, then scores and ranks the risk."
         )
         hint.setObjectName("Subtitle")
         hint.setWordWrap(True)
 
         self.input_box = QTextEdit()
         self.input_box.setPlaceholderText(
-            "e.g. Near miss at GGS-4: worker on an incomplete scaffold at 6 m "
-            "with his lanyard not anchored while replacing a light fitting..."
+            "e.g. Near miss at GGS-4: worker on an incomplete scaffold at 6 m with his "
+            "lanyard not anchored while replacing a light fitting..."
         )
-        self.input_box.setMinimumHeight(220)
+        self.input_box.setMinimumHeight(190)
+
+        encoder_label = QLabel("SEMANTIC ENCODER")
+        encoder_label.setObjectName("CardCaption")
+        self.encoder_box = QComboBox()
+        self.encoder_box.addItem("Auto - transformer, fall back offline", "auto")
+        self.encoder_box.addItem("Transformer (all-MiniLM-L6-v2)", "transformer")
+        self.encoder_box.addItem("Offline - lexical rules only", "hashing")
+        self.encoder_box.currentIndexChanged.connect(self.on_encoder_changed)
 
         self.process_button = QPushButton("Process Text")
         self.process_button.setObjectName("Primary")
@@ -456,6 +558,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(section)
         layout.addWidget(hint)
         layout.addWidget(self.input_box, stretch=1)
+        layout.addWidget(encoder_label)
+        layout.addWidget(self.encoder_box)
         layout.addWidget(self.process_button)
         layout.addWidget(self.import_button)
         layout.addWidget(self.seed_button)
@@ -464,7 +568,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_dashboard(self) -> QWidget:
-        """Right pane: KPI header above the streaming results matrix."""
+        """Right pane: KPI header, the three analysis tabs and the evidence pane."""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -472,34 +576,48 @@ class MainWindow(QMainWindow):
 
         self.header = DashboardHeader()
 
+        self.table = _make_table(TABLE_COLUMNS)
+        self.table.itemSelectionChanged.connect(self.on_row_selected)
+        self.hotspot_table = _make_table(HOTSPOT_COLUMNS)
+        self.review_table = _make_table(REVIEW_COLUMNS)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.table, "Parsed Incident Matrix")
+        self.tabs.addTab(self.hotspot_table, "Risk Hotspots")
+        self.tabs.addTab(self.review_table, "Human Review Queue")
+
+        self.evidence_box = QTextEdit()
+        self.evidence_box.setReadOnly(True)
+        self.evidence_box.setFixedHeight(112)
+        self.evidence_box.setPlaceholderText(
+            "Select a row to see why the pipeline reached its verdict."
+        )
+
         matrix_frame = QFrame()
         matrix_frame.setObjectName("Panel")
         matrix_layout = QVBoxLayout(matrix_frame)
         matrix_layout.setContentsMargins(14, 14, 14, 14)
         matrix_layout.setSpacing(8)
 
-        matrix_title = QLabel("PARSED INCIDENT MATRIX")
-        matrix_title.setObjectName("SectionTitle")
+        evidence_title = QLabel("EVIDENCE FOR THE SELECTED REPORT")
+        evidence_title.setObjectName("SectionTitle")
 
-        self.table = QTableWidget(0, len(TABLE_COLUMNS))
-        self.table.setHorizontalHeaderLabels([label for label, _, _ in TABLE_COLUMNS])
-        self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        for column, (_, _, width) in enumerate(TABLE_COLUMNS):
-            self.table.setColumnWidth(column, width)
-
-        matrix_layout.addWidget(matrix_title)
-        matrix_layout.addWidget(self.table)
+        matrix_layout.addWidget(self.tabs, stretch=1)
+        matrix_layout.addWidget(evidence_title)
+        matrix_layout.addWidget(self.evidence_box)
 
         layout.addWidget(self.header)
         layout.addWidget(matrix_frame, stretch=1)
         return panel
 
     # -- actions -----------------------------------------------------------
+
+    def on_encoder_changed(self) -> None:
+        """Rebuild the pipeline when the operator picks a different encoder."""
+        backend = self.encoder_box.currentData()
+        self.pipeline = SIFPipeline(backend=backend)
+        self.statusBar().showMessage(
+            f"Encoder set to '{backend}' - it loads on the next run.", 6000)
 
     def process_text(self) -> None:
         """Parse the narratives currently in the ingestion box."""
@@ -512,24 +630,26 @@ class MainWindow(QMainWindow):
 
         # Blank lines separate incidents; a single block is one incident.
         blocks = [block.strip() for block in raw.split("\n\n") if block.strip()]
-        self._start_worker(AnalysisWorker(self.engine, texts=blocks, parent=self))
+        self._start_worker(AnalysisWorker(self.pipeline, texts=blocks, parent=self))
 
     def load_seed_data(self) -> None:
         """Populate the ingestion box with the five seed incidents and run them."""
         self.input_box.setPlainText("\n\n".join(SEED_REPORTS))
-        self._start_worker(AnalysisWorker(self.engine, texts=list(SEED_REPORTS), parent=self))
+        references = [f"SEED-{number:02d}" for number in range(1, len(SEED_REPORTS) + 1)]
+        self._start_worker(AnalysisWorker(self.pipeline, texts=list(SEED_REPORTS),
+                                          references=references, parent=self))
 
     def import_csv(self) -> None:
-        """Choose a CSV file and parse it on the worker thread."""
+        """Choose a CSV file and run the pipeline over it on the worker thread."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Batch Import UA/UC Reports", os.getcwd(), "CSV files (*.csv);;All files (*)"
         )
         if not path:
             return
-        self._start_worker(AnalysisWorker(self.engine, csv_path=path, parent=self))
+        self._start_worker(AnalysisWorker(self.pipeline, csv_path=path, parent=self))
 
     def export_csv(self) -> None:
-        """Write the current dashboard matrix to a CSV file."""
+        """Write the current incident matrix to a CSV file."""
         if not self.rows:
             QMessageBox.information(self, APP_NAME, "There is nothing to export yet.")
             return
@@ -541,7 +661,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        headers = [label for label, _, _ in TABLE_COLUMNS]
+        headers = [label for label, _, _ in TABLE_COLUMNS] + ["Explanation"]
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle)
@@ -549,6 +669,7 @@ class MainWindow(QMainWindow):
                 for index, row in enumerate(self.rows, start=1):
                     writer.writerow(
                         [self._cell_text(row, key, index) for _, key, _ in TABLE_COLUMNS]
+                        + [row.get("explanation", "")]
                     )
         except OSError as exc:
             QMessageBox.critical(self, APP_NAME, f"Could not write the file:\n{exc}")
@@ -556,10 +677,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Exported {len(self.rows)} rows to {path}", 8000)
 
     def clear_dashboard(self) -> None:
-        """Reset the table, counters and KPI header."""
+        """Reset every table, counter and panel."""
         self.rows.clear()
-        self.table.setRowCount(0)
-        self.header.update_metrics(0, 0, "-")
+        for table in (self.table, self.hotspot_table, self.review_table):
+            table.setRowCount(0)
+        self.header.update_metrics({})
+        self.evidence_box.clear()
         self.statusBar().showMessage("Dashboard cleared.", 4000)
 
     # -- worker plumbing ---------------------------------------------------
@@ -575,6 +698,7 @@ class MainWindow(QMainWindow):
         self.worker = worker
         worker.row_ready.connect(self.on_row_ready)
         worker.progress.connect(self.on_progress)
+        worker.status.connect(self.on_status)
         worker.failed.connect(self.on_failed)
         worker.completed.connect(self.on_completed)
         worker.finished.connect(self._release_worker)
@@ -582,18 +706,17 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(False)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
-        self.statusBar().showMessage("Analysing reports on the worker thread...")
         worker.start()
 
     def on_row_ready(self, result: Dict[str, object]) -> None:
-        """Slot: append one streamed assessment to the matrix (GUI thread)."""
+        """Slot: append one streamed result to the matrix (GUI thread)."""
         self.rows.append(result)
         row_index = self.table.rowCount()
         self.table.insertRow(row_index)
 
         for column, (_, key, _) in enumerate(TABLE_COLUMNS):
             item = QTableWidgetItem(self._cell_text(result, key, row_index + 1))
-            item.setToolTip(str(result.get("raw_text", "")))
+            item.setToolTip(str(result.get("explanation", "")))
             if key == "sif_potential":
                 is_sif = bool(result.get("sif_potential"))
                 item.setForeground(QColor(COLOR_DANGER if is_sif else COLOR_OK))
@@ -601,15 +724,22 @@ class MainWindow(QMainWindow):
                 font = QFont()
                 font.setBold(True)
                 item.setFont(font)
-            elif key == "severity_hint":
-                item.setForeground(QColor(self._severity_color(str(result.get(key, "")))))
+            elif key in {"risk_band", "risk_score"}:
+                band = str(result.get("risk_band", "Low"))
+                item.setForeground(QColor(BAND_COLORS.get(band, COLOR_OK)))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            elif key in {"_index", "_timestamp", "confidence"}:
+            elif key == "review_trigger":
+                tone = COLOR_WARN if result.get("needs_review") else COLOR_MUTED
+                item.setForeground(QColor(tone))
+            elif key in {"_index", "reference", "p_sif"}:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, column, item)
 
         self.table.scrollToBottom()
-        self._refresh_metrics()
+        if len(self.rows) % self.PANEL_REFRESH_EVERY == 0:
+            self._refresh_panels()
+        else:
+            self.header.update_metrics(self._aggregate().kpis)
 
     def on_progress(self, done: int, total: int) -> None:
         """Slot: advance the progress bar."""
@@ -617,16 +747,52 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(done)
         self.statusBar().showMessage(f"Processing report {done} of {total}...")
 
+    def on_status(self, message: str) -> None:
+        """Slot: surface a stage message from the worker."""
+        self.statusBar().showMessage(message)
+
     def on_failed(self, message: str) -> None:
         """Slot: surface a worker-side error without killing the session."""
         self.statusBar().showMessage("Analysis failed.", 6000)
         QMessageBox.warning(self, APP_NAME, message)
 
     def on_completed(self, count: int) -> None:
-        """Slot: final bookkeeping once a run finishes."""
+        """Slot: final aggregation once a run finishes."""
+        intelligence = self._refresh_panels()
+        encoder = str(intelligence.kpis.get("encoder", ""))
         self.statusBar().showMessage(
-            f"Completed - {count} report(s) analysed, {self._sif_count()} flagged SIF-potential.",
-            10000,
+            f"Completed - {count} report(s) this run  |  dashboard totals: "
+            f"{intelligence.kpis.get('total', 0)} processed, "
+            f"{intelligence.kpis.get('sif_potential', 0)} SIF-potential, "
+            f"{intelligence.kpis.get('needs_review', 0)} awaiting review  |  {encoder}",
+            15000,
+        )
+
+    def on_row_selected(self) -> None:
+        """Slot: render the evidence trail for the selected incident."""
+        rows = {index.row() for index in self.table.selectedIndexes()}
+        if not rows:
+            return
+        position = min(rows)
+        if position >= len(self.rows):
+            return
+        result = self.rows[position]
+        evidence = result.get("evidence", {}) or {}
+        cues = "; ".join(evidence.get("lexical_cues", [])) or "none"
+        semantic = ", ".join(
+            f"{field} -> {label} ({score:.2f})"
+            for field, (label, score) in (evidence.get("semantic_matches", {}) or {}).items()
+        ) or "none"
+        risk = evidence.get("risk", {}) or {}
+        self.evidence_box.setHtml(
+            f"<b>{result.get('explanation', '')}</b><br/>"
+            f"<span style='color:{COLOR_MUTED}'>Decision path:</span> "
+            f"{evidence.get('decision_path', '')}<br/>"
+            f"<span style='color:{COLOR_MUTED}'>Risk:</span> "
+            f"{result.get('risk_score', 0)}/100 ({result.get('risk_band', '')}) = "
+            f"{risk.get('rationale', '')}<br/>"
+            f"<span style='color:{COLOR_MUTED}'>Lexical cues:</span> {cues}<br/>"
+            f"<span style='color:{COLOR_MUTED}'>Nearest semantic prototypes:</span> {semantic}"
         )
 
     def _release_worker(self) -> None:
@@ -635,48 +801,81 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(True)
         self.worker = None
 
+    # -- panels ------------------------------------------------------------
+
+    def _aggregate(self):
+        """Re-run corpus-level aggregation over the rows collected so far."""
+        from sif.pipeline import PipelineResult
+
+        results = []
+        for row in self.rows:
+            payload = {key: value for key, value in row.items()
+                       if key in PipelineResult.__dataclass_fields__}
+            results.append(PipelineResult(**payload))
+        return self.pipeline.aggregate(results)
+
+    def _refresh_panels(self):
+        """Recompute the KPI header, hotspot table and review queue."""
+        intelligence = self._aggregate()
+        self.header.update_metrics(intelligence.kpis)
+        self._fill_table(self.hotspot_table, HOTSPOT_COLUMNS,
+                         [spot.to_dict() for spot in intelligence.hotspots])
+        self._fill_table(self.review_table, REVIEW_COLUMNS,
+                         [item.to_dict() for item in intelligence.review_queue])
+        self.tabs.setTabText(1, f"Risk Hotspots ({len(intelligence.hotspots)})")
+        self.tabs.setTabText(2, f"Human Review Queue ({len(intelligence.review_queue)})")
+        return intelligence
+
+    def _fill_table(self, table: QTableWidget, columns: Sequence[tuple],
+                    payloads: Sequence[Dict[str, object]]) -> None:
+        """Replace a table's contents with ``payloads``."""
+        table.setRowCount(0)
+        for payload in payloads:
+            row_index = table.rowCount()
+            table.insertRow(row_index)
+            for column, (_, key, _) in enumerate(columns):
+                value = payload.get(key, "")
+                if isinstance(value, bool):
+                    text = "YES" if value else "no"
+                elif isinstance(value, float):
+                    text = f"{value:.1f}"
+                else:
+                    text = str(value)
+                item = QTableWidgetItem(text)
+                if key in {"reports", "sif_reports", "sif_rate", "mean_risk", "max_risk",
+                           "risk_score", "sif_potential", "reference"}:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if key in {"mean_risk", "max_risk", "risk_score"}:
+                    numeric = float(value or 0.0)
+                    band = ("Critical" if numeric >= 70 else "High" if numeric >= 50
+                            else "Medium" if numeric >= 30 else "Low")
+                    item.setForeground(QColor(BAND_COLORS[band]))
+                if key == "trigger":
+                    item.setForeground(QColor(COLOR_WARN))
+                table.setItem(row_index, column, item)
+
     # -- small helpers -----------------------------------------------------
 
     def _set_controls_enabled(self, enabled: bool) -> None:
-        for button in (
-            self.process_button,
-            self.import_button,
-            self.seed_button,
-            self.clear_button,
-        ):
-            button.setEnabled(enabled)
-
-    def _sif_count(self) -> int:
-        return sum(1 for row in self.rows if row.get("sif_potential"))
-
-    def _refresh_metrics(self) -> None:
-        """Recompute the KPI header from the accumulated rows."""
-        total = len(self.rows)
-        sif_count = self._sif_count()
-
-        tally: Dict[str, int] = {}
-        for row in self.rows:
-            if row.get("sif_potential"):
-                rule = str(row.get("iogp_rule", ""))
-                tally[rule] = tally.get(rule, 0) + 1
-        top_rule = max(tally, key=tally.get) if tally else "-"
-        self.header.update_metrics(total, sif_count, top_rule)
-
-    @staticmethod
-    def _severity_color(severity: str) -> str:
-        return {"High": COLOR_DANGER, "Medium": COLOR_WARN}.get(severity, COLOR_OK)
+        for widget in (self.process_button, self.import_button, self.seed_button,
+                       self.clear_button, self.encoder_box):
+            widget.setEnabled(enabled)
 
     @staticmethod
     def _cell_text(result: Dict[str, object], key: str, index: int) -> str:
-        """Render one assessment field as display text."""
+        """Render one result field as display text."""
         if key == "_index":
             return str(index)
-        if key == "_timestamp":
-            return str(result.get("_timestamp", ""))
         if key == "sif_potential":
             return "YES" if result.get("sif_potential") else "no"
-        if key == "confidence":
-            return f"{float(result.get('confidence', 0.0)):.2f}"
+        if key in {"p_sif", "confidence"}:
+            return f"{float(result.get(key, 0.0)):.2f}"
+        if key == "risk_score":
+            return f"{float(result.get(key, 0.0)):.0f}"
+        if key == "review_trigger":
+            return str(result.get(key, "") or "-")
+        if key == "reference":
+            return str(result.get(key, "") or "-")
         if key == "raw_text":
             text = str(result.get("raw_text", ""))
             return text if len(text) <= 300 else text[:297] + "..."
@@ -688,7 +887,7 @@ class MainWindow(QMainWindow):
         """Stop any running worker cleanly before the window closes."""
         if self.worker is not None and self.worker.isRunning():
             self.worker.requestInterruption()
-            self.worker.wait(2000)
+            self.worker.wait(3000)
         super().closeEvent(event)
 
 

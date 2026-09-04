@@ -1,1 +1,9 @@
+# Desktop UI and numerics - required.
 PyQt6>=6.5
+numpy>=1.24
+
+# Semantic encoder (stage 2). Pulls torch and transformers, ~2 GB installed, and
+# downloads all-MiniLM-L6-v2 (~90 MB) on first run. Remove this line to run the
+# console offline: it falls back to the deterministic lexical engine, which needs
+# no model, no network and no torch.
+sentence-transformers>=3.0

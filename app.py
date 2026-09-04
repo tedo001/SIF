@@ -8,15 +8,31 @@ Run with::
 
 Module map
 ----------
-``sif_engine.py``
-    Dependency-free heuristic parser (:class:`~sif_engine.SIFEngine`) that turns
-    a raw UA/UC or near-miss narrative into structured safety insight and flags
-    SIF potential.
+``sif/``
+    The analysis pipeline, independent of Qt:
+    ``preprocessing`` (clean, expand abbreviations, segment) ->
+    ``encoders`` (transformer sentence embeddings, offline fallback) ->
+    ``heads`` (SIF classifier, IOGP rule classifier, entity extraction) ->
+    ``evidence`` -> ``scoring`` -> ``patterns`` / ``review``, orchestrated by
+    ``pipeline.SIFPipeline``. ``lexical`` holds the deterministic rule layer that
+    every stage is anchored to.
 ``main.py``
-    PyQt6 presentation layer: control panel, KPI dashboard, results matrix and
-    the :class:`~main.AnalysisWorker` ``QThread`` that keeps the UI responsive.
+    PyQt6 presentation layer: control panel, KPI dashboard, incident matrix,
+    hotspot and review panels, and the :class:`~main.AnalysisWorker` ``QThread``
+    that keeps the UI responsive while the model loads and runs.
 ``app.py``
     This launcher: environment checks, application bootstrap, event loop.
+
+Encoder selection
+-----------------
+The console picks its encoder at run time and can be steered without code
+changes::
+
+    SIF_ENCODER=transformer|hashing|auto   # default: auto
+    SIF_ENCODER_MODEL=<hub id or local dir>  # default: all-MiniLM-L6-v2
+
+``auto`` uses the transformer when it can be loaded and otherwise falls back to
+the offline lexical engine, so the application always starts.
 """
 
 from __future__ import annotations

@@ -1,4 +1,13 @@
-"""Heuristic parsing engine for UA/UC and near-miss field reports.
+"""Lexical layer: deterministic keyword/pattern analysis of field reports.
+
+This module is the knowledge base of the system - the IOGP rule vocabulary,
+the high-energy signatures, the critical-barrier signatures and the activity /
+location gazetteers - together with :class:`LexicalEngine`, which applies them
+with regular expressions alone.
+
+It runs with no model, no network and no warm-up, which makes it both the
+deterministic backbone of the semantic pipeline (see :mod:`sif.pipeline`) and a
+complete fallback when no transformer is available.
 
 Problem Statement 26165 (Oil India Limited) asks for a system that turns raw,
 free-text Unsafe Act / Unsafe Condition (UA/UC) and near-miss reports into
@@ -24,8 +33,8 @@ is where fatalities come from.
 
 Public API
 ----------
-    >>> from sif_engine import SIFEngine
-    >>> SIFEngine().analyze("Worker on scaffold at 4 m without harness")["sif_potential"]
+    >>> from sif.lexical import LexicalEngine
+    >>> LexicalEngine().analyze("Worker on scaffold at 4 m without harness")["sif_potential"]
     True
 """
 
@@ -36,6 +45,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Pattern, Sequence, Tuple
 
 __all__ = [
+    "LexicalEngine",
     "SIFEngine",
     "SIFAssessment",
     "SEED_REPORTS",
@@ -68,6 +78,20 @@ CSV_TEXT_COLUMNS: Tuple[str, ...] = (
 def _compile(patterns: Sequence[str]) -> List[Pattern[str]]:
     """Compile a sequence of case-insensitive regex fragments."""
     return [re.compile(p, re.IGNORECASE) for p in patterns]
+
+
+def _distinct_cues(hits: Sequence[str], limit: int = 4) -> List[str]:
+    """Drop cue fragments contained in a longer cue, then take the first few.
+
+    Overlapping patterns routinely match nested spans of the same phrase ("no
+    isolation" inside "no isolation certificate"); showing all of them pads the
+    audit trail without adding evidence.
+    """
+    kept: List[str] = []
+    for cue in sorted({hit.strip() for hit in hits if hit.strip()}, key=len, reverse=True):
+        if not any(cue in longer for longer in kept):
+            kept.append(cue)
+    return sorted(kept)[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +351,9 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"\bstill (?:live|energi[sz]ed|pressuri[sz]ed|charged)\b",
         r"\bisolation (?:was )?(?:not verified|incomplete|missing|removed)\b",
         r"\bno (?:earthing|grounding|isolation certificate|caution board)\b",
+        r"\bno (?:\w+\s+){0,2}(?:loto|lock\s?out|isolation|earthing|grounding)\b",
+        r"\b(?:loto|lock\s?out|isolation) (?:was |were )?(?:not|never)"
+        r" (?:applied|done|carried out|verified|in place)\b",
         r"\bbreaker (?:not )?(?:racked out|left closed)\b",
         r"\btry[\s-]?out (?:test )?not (?:done|performed)\b",
     )),
@@ -580,7 +607,7 @@ class SIFAssessment:
 # ---------------------------------------------------------------------------
 
 
-class SIFEngine:
+class LexicalEngine:
     """Rule-based parser that converts a raw field report into safety insight.
 
     The engine is stateless and thread-safe once constructed: all compiled
@@ -589,7 +616,7 @@ class SIFEngine:
 
     Example
     -------
-    >>> engine = SIFEngine()
+    >>> engine = LexicalEngine()
     >>> result = engine.analyze(
     ...     "Near miss at GGS-4: 11 kV feeder was not earthed before the "
     ...     "electrician started cable jointing; no LOTO applied."
@@ -688,6 +715,23 @@ class SIFEngine:
             raw_text=text.strip() if isinstance(text, str) else "",
         )
 
+    def rule_scores(self, text: str) -> Dict[str, int]:
+        """Return the weighted match score of every IOGP rule for ``text``.
+
+        Exposed so the semantic layer can fuse lexical evidence with embedding
+        similarity per label rather than only seeing the winning rule.
+        """
+        clean = self._normalise(text)
+        if not clean:
+            return {}
+        scores: Dict[str, int] = {}
+        for rule, primary, secondary in self._rules:
+            score = 3 * sum(1 for pattern in primary if pattern.search(clean))
+            score += sum(1 for pattern in secondary if pattern.search(clean))
+            if score:
+                scores[rule.name] = score
+        return scores
+
     def analyze_many(self, texts: Sequence[str]) -> List[Dict[str, object]]:
         """Analyse a sequence of reports, skipping blank entries."""
         return [self.analyze(item) for item in texts if isinstance(item, str) and item.strip()]
@@ -722,7 +766,7 @@ class SIFEngine:
             return None, best_score
 
         if best_terms:
-            evidence.append("rule cues: " + ", ".join(sorted(set(best_terms))[:4]))
+            evidence.append("rule cues: " + ", ".join(_distinct_cues(best_terms)))
         return best_rule, best_score
 
     def _match_energy(self, clean: str, evidence: List[str]) -> Tuple[str, List[str]]:
@@ -736,7 +780,7 @@ class SIFEngine:
                 hits.extend(matched)
         if not hits:
             return NO_ENERGY, []
-        evidence.append("energy cues: " + ", ".join(sorted(set(hits))[:4]))
+        evidence.append("energy cues: " + ", ".join(_distinct_cues(hits)))
         return " + ".join(dict.fromkeys(labels)), hits
 
     def _match_barrier(self, clean: str, evidence: List[str]) -> Tuple[str, List[str]]:
@@ -750,7 +794,7 @@ class SIFEngine:
                 hits.extend(matched)
         if not hits:
             return NO_BARRIER_FAILURE, []
-        evidence.append("barrier cues: " + ", ".join(sorted(set(hits))[:4]))
+        evidence.append("barrier cues: " + ", ".join(_distinct_cues(hits)))
         return "; ".join(dict.fromkeys(labels)), hits
 
     def _extract_activity(self, clean: str) -> str:
@@ -842,8 +886,12 @@ SEED_REPORTS: Tuple[str, ...] = (
 )
 
 
+#: Backwards-compatible alias: the lexical engine was the original entry point.
+SIFEngine = LexicalEngine
+
+
 if __name__ == "__main__":  # pragma: no cover - manual smoke test
-    engine = SIFEngine()
+    engine = LexicalEngine()
     for index, report in enumerate(SEED_REPORTS, start=1):
         outcome = engine.analyze(report)
         print(f"[{index}] SIF={outcome['sif_potential']} | {outcome['iogp_rule']}")
