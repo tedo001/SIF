@@ -8,7 +8,15 @@ The stylesheet is a plain Qt style sheet string; widgets that need painting
 
 from __future__ import annotations
 
-__all__ = ["C", "STYLESHEET", "BAND_COLORS", "SEVERITY_COLORS", "CATEGORICAL"]
+import os
+
+__all__ = ["C", "STYLESHEET", "BAND_COLORS", "SEVERITY_COLORS", "CATEGORICAL", "ASSETS"]
+
+#: Directory holding the small PNG arrows used by the scroll controls. Qt style
+#: sheets cannot draw a triangle reliably across styles, so the stepper arrows
+#: ship as assets and are addressed by absolute path (forward slashes, which Qt
+#: wants on every platform).
+ASSETS = os.path.dirname(os.path.abspath(__file__)).replace(os.sep, "/") + "/assets"
 
 
 class C:
@@ -35,6 +43,11 @@ class C:
     ACCENT_DIM = "#0e7a72"
     BLUE = "#3b82f6"
     PURPLE = "#8b5cf6"
+
+    # Scroll controls.
+    SCROLL_TRACK = "#0c1626"
+    SCROLL_THUMB = "#8fa8c0"
+    SCROLL_THUMB_HOVER = "#b9cde0"
 
     # Status.
     DANGER = "#ef4444"
@@ -187,11 +200,92 @@ QProgressBar {{
     text-align: center;
 }}
 QProgressBar::chunk {{ background-color: {C.ACCENT}; border-radius: 5px; }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {C.BORDER}; border-radius: 5px; min-height: 30px; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ height: 0px; width: 0px; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: {C.BORDER}; border-radius: 5px; min-width: 30px; }}
+/* Scroll controls: a sunken track, a light rounded thumb and stepper arrows at
+   both ends, so it is obvious at a glance that a panel has more content. The
+   arrows are drawn with the CSS border-triangle trick - no image assets. */
+QScrollBar:vertical {{
+    background: {C.SCROLL_TRACK};
+    width: 15px;
+    margin: 0px;
+    border: 1px solid {C.BORDER};
+    border-radius: 7px;
+}}
+QScrollBar::handle:vertical {{
+    background: {C.SCROLL_THUMB};
+    border-radius: 5px;
+    min-height: 34px;
+    margin: 16px 2px 16px 2px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {C.SCROLL_THUMB_HOVER}; }}
+QScrollBar::handle:vertical:pressed {{ background: {C.TEXT}; }}
+QScrollBar::sub-line:vertical {{
+    background: transparent;
+    border: none;
+    height: 16px;
+    subcontrol-position: top;
+    subcontrol-origin: margin;
+}}
+QScrollBar::add-line:vertical {{
+    background: transparent;
+    border: none;
+    height: 16px;
+    subcontrol-position: bottom;
+    subcontrol-origin: margin;
+}}
+QScrollBar::up-arrow:vertical {{
+    image: url({ASSETS}/arrow_up.png);
+    width: 11px;
+    height: 8px;
+}}
+QScrollBar::down-arrow:vertical {{
+    image: url({ASSETS}/arrow_down.png);
+    width: 11px;
+    height: 8px;
+}}
+QScrollBar::up-arrow:vertical:hover {{ image: url({ASSETS}/arrow_up_hover.png); }}
+QScrollBar::down-arrow:vertical:hover {{ image: url({ASSETS}/arrow_down_hover.png); }}
+QScrollBar:horizontal {{
+    background: {C.SCROLL_TRACK};
+    height: 15px;
+    margin: 0px;
+    border: 1px solid {C.BORDER};
+    border-radius: 7px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {C.SCROLL_THUMB};
+    border-radius: 5px;
+    min-width: 34px;
+    margin: 2px 16px 2px 16px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {C.SCROLL_THUMB_HOVER}; }}
+QScrollBar::handle:horizontal:pressed {{ background: {C.TEXT}; }}
+QScrollBar::sub-line:horizontal {{
+    background: transparent;
+    border: none;
+    width: 16px;
+    subcontrol-position: left;
+    subcontrol-origin: margin;
+}}
+QScrollBar::add-line:horizontal {{
+    background: transparent;
+    border: none;
+    width: 16px;
+    subcontrol-position: right;
+    subcontrol-origin: margin;
+}}
+QScrollBar::left-arrow:horizontal {{
+    image: url({ASSETS}/arrow_left.png);
+    width: 8px;
+    height: 11px;
+}}
+QScrollBar::right-arrow:horizontal {{
+    image: url({ASSETS}/arrow_right.png);
+    width: 8px;
+    height: 11px;
+}}
+QScrollBar::left-arrow:horizontal:hover {{ image: url({ASSETS}/arrow_left_hover.png); }}
+QScrollBar::right-arrow:horizontal:hover {{ image: url({ASSETS}/arrow_right_hover.png); }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QStatusBar {{ background-color: {C.HEADER}; color: {C.TEXT_DIM}; }}
 QToolTip {{
     background-color: {C.PANEL_ALT};

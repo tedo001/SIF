@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -103,12 +103,21 @@ DOCUMENT_COLUMNS: Sequence[Tuple[str, str, int]] = (
 )
 
 
-def _scrollable(widget: QWidget) -> QScrollArea:
-    """Wrap a page so it stays usable on a small screen."""
+def _scrollable(widget: QWidget, minimum_height: int = 0) -> QScrollArea:
+    """Wrap a page so it stays usable on a small screen.
+
+    ``minimum_height`` is the point below which the page stops compressing and
+    starts scrolling instead - without it a Qt layout keeps shrinking its
+    children and the scroll bar never appears.
+    """
+    if minimum_height:
+        widget.setMinimumHeight(minimum_height)
     area = QScrollArea()
     area.setWidgetResizable(True)
     area.setFrameShape(QFrame.Shape.NoFrame)
     area.setWidget(widget)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     return area
 
 
@@ -123,14 +132,22 @@ class DashboardView(QWidget):
     row_selected = pyqtSignal(int)
     review_requested = pyqtSignal()
 
+    #: Below this the dashboard scrolls instead of squeezing its panels.
+    MIN_CONTENT_HEIGHT = 860
+
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(18, 16, 18, 12)
         layout.setSpacing(14)
         layout.addLayout(self._build_kpis())
         layout.addLayout(self._build_charts(), stretch=2)
         layout.addLayout(self._build_workspace(), stretch=5)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(_scrollable(content, self.MIN_CONTENT_HEIGHT))
 
     # -- construction ------------------------------------------------------
 
@@ -441,9 +458,13 @@ class BatchUploadView(QWidget):
     analyse_requested = pyqtSignal()
     clear_requested = pyqtSignal()
 
+    #: Below this the page scrolls instead of squeezing the preview away.
+    MIN_CONTENT_HEIGHT = 720
+
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
@@ -492,6 +513,10 @@ class BatchUploadView(QWidget):
         layout.addWidget(actions)
         layout.addWidget(self.documents, stretch=3)
         layout.addWidget(self.preview, stretch=2)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(_scrollable(content, self.MIN_CONTENT_HEIGHT))
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)
@@ -551,7 +576,7 @@ class AnalyticsView(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(_scrollable(content))
+        outer.addWidget(_scrollable(content, 900))
 
     def update_charts(self, rules, energies, barriers, activities) -> None:
         self.rule_chart.set_data(rules)
@@ -588,7 +613,7 @@ class SettingsView(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(_scrollable(content))
+        outer.addWidget(_scrollable(content, 980))
 
     # -- sections ----------------------------------------------------------
 

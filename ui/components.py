@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QFrame,
+    QScrollArea,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -162,6 +163,19 @@ class Sidebar(QFrame):
         layout.setSpacing(0)
         layout.addWidget(self._brand())
 
+        # The nav list scrolls on short screens so the footer card and the last
+        # entries stay reachable instead of being clipped.
+        nav = QWidget()
+        nav_layout = QVBoxLayout(nav)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(0)
+
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setWidget(nav)
+
         group = QButtonGroup(self)
         group.setExclusive(True)
         for key, glyph, label in items:
@@ -187,12 +201,13 @@ class Sidebar(QFrame):
 
             row_layout.addWidget(button, stretch=1)
             row_layout.addWidget(badge)
-            layout.addWidget(row)
+            nav_layout.addWidget(row)
 
             self._buttons[key] = button
             self._badges[key] = badge
 
-        layout.addStretch(1)
+        nav_layout.addStretch(1)
+        layout.addWidget(scroller, stretch=1)
         layout.addWidget(self._footer_card())
 
     def select(self, key: str) -> None:
@@ -352,6 +367,12 @@ class DataTable(QTableWidget):
         self.horizontalHeader().setStretchLastSection(True)
         self.setShowGrid(False)
         self.verticalHeader().setDefaultSectionSize(30)
+        # Per-pixel scrolling so the styled bars track the content smoothly
+        # instead of jumping a whole row (or column) per step.
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         for index, (_, _, width) in enumerate(columns):
             self.setColumnWidth(index, width)
         if on_select is not None:

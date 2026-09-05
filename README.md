@@ -169,7 +169,8 @@ disagreement between the two goes to the human review queue.
 | `sif/ocr.py` | `DocumentExtractor` — plain text, PDF text layer, PaddleOCR for scans; per-line OCR confidence. |
 | `sif/mlops.py` | Features, `SIFModel` (XGBoost), `MLflowTracker`, `MLOpsService`. |
 | `sif/logging_setup.py` | Rotating file + in-memory ring buffer behind the Settings log view. |
-| `ui/` | `theme`, `charts` (painted bar/donut), `components`, `views`. |
+| `ui/` | `theme` (palette, style sheet, scroll-control assets), `charts` (painted bar/donut), `components`, `views`. |
+| `ui/assets/` | Scrollbar stepper arrows - Qt cannot draw a triangle reliably from a style sheet alone. |
 | `sif/lexical.py` | `LexicalEngine` — IOGP, energy, barrier, activity and location knowledge as patterns; the deterministic backbone. Holds the 5 seed narratives. |
 | `sif/prototypes.py` | Natural-language label descriptions for zero-shot semantic classification. |
 | `main.py` | PyQt6 layer: `MainWindow`, `AnalysisWorker` (`QThread`), KPI cards, three panels. |
@@ -194,6 +195,19 @@ problem statement asks for keep their names: `sif_potential`, `iogp_rule`,
 Every extractor degrades to an explicit fallback (`Unclassified / General HSE`,
 `Unspecified activity`, `Location not stated`, `No barrier failure identified`)
 rather than raising, so a malformed row never breaks a batch.
+
+## Scrolling
+
+Every page that can outgrow the window scrolls rather than compressing: the
+dashboard, batch upload, analytics and settings pages each sit in a scroll area
+with a minimum content height, the sidebar nav scrolls on short screens, and all
+tables scroll per pixel in both directions.
+
+The controls themselves are styled to match the rest of the console - a sunken
+track, a light rounded thumb, and stepper arrows at both ends drawn from the PNGs
+in `ui/assets/`, since a Qt style sheet cannot reliably draw the triangles
+itself. A unit test asserts every asset the style sheet references exists, so a
+rename cannot silently leave the arrows blank.
 
 ## Concurrency
 

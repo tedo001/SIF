@@ -666,6 +666,30 @@ class TestModelInPipeline(unittest.TestCase):
         self.assertIsNone(result.ml_probability)
 
 
+class TestTheme(unittest.TestCase):
+    """The style sheet must not reference assets that are missing."""
+
+    def test_every_referenced_asset_exists(self) -> None:
+        from ui.theme import ASSETS, STYLESHEET
+
+        references = [chunk.split(")")[0]
+                      for chunk in STYLESHEET.split("url(")[1:]]
+        self.assertTrue(references, "the scroll controls should reference arrow assets")
+        for path in references:
+            self.assertTrue(os.path.isfile(path), f"missing style asset: {path}")
+        self.assertTrue(os.path.isdir(ASSETS))
+
+    def test_scroll_controls_are_styled(self) -> None:
+        from ui.theme import STYLESHEET
+
+        for selector in ("QScrollBar:vertical", "QScrollBar::handle:vertical",
+                         "QScrollBar::up-arrow:vertical", "QScrollBar::down-arrow:vertical",
+                         "QScrollBar:horizontal", "QScrollBar::handle:horizontal",
+                         "QScrollBar::left-arrow:horizontal",
+                         "QScrollBar::right-arrow:horizontal"):
+            self.assertIn(selector, STYLESHEET)
+
+
 @unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
 class TestInterfaceWidgets(unittest.TestCase):
     """The presentation layer renders without a display."""
@@ -725,6 +749,17 @@ class TestInterfaceWidgets(unittest.TestCase):
         self.assertIn("Energy Isolation", view.detail_fields["rule"]._full_value)
         view.show_detail(None)
         self.assertEqual(view.detail_pill.text(), "NO SELECTION")
+
+    def test_pages_scroll_instead_of_squashing(self) -> None:
+        from ui.views import BatchUploadView, DashboardView
+
+        for view_class in (DashboardView, BatchUploadView):
+            view = view_class()
+            view.resize(900, 420)  # deliberately shorter than the content
+            area = view.findChild(__import__("PyQt6.QtWidgets", fromlist=["QScrollArea"])
+                                  .QScrollArea)
+            self.assertIsNotNone(area, f"{view_class.__name__} should be scrollable")
+            self.assertGreaterEqual(area.widget().minimumHeight(), 700)
 
     def test_settings_view_renders_state(self) -> None:
         from ui.views import SettingsView
