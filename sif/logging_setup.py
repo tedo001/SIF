@@ -41,6 +41,7 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _state_lock = threading.Lock()
 _ring: Optional["RingBufferHandler"] = None
 _file_handler: Optional[logging.Handler] = None
+_stream_handler: Optional[logging.Handler] = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ def configure_logging(level: str = DEFAULT_LEVEL, directory: str = DEFAULT_DIREC
     Safe to call repeatedly: later calls only adjust the level. The ``directory``
     of the first call wins for the whole process - see :func:`active_log_file`.
     """
-    global _ring, _file_handler
+    global _ring, _file_handler, _stream_handler
 
     with _state_lock:
         root = logging.getLogger()
@@ -153,12 +154,14 @@ def configure_logging(level: str = DEFAULT_LEVEL, directory: str = DEFAULT_DIREC
             except OSError as exc:  # pragma: no cover - read-only install directory
                 root.warning("File logging disabled (%s)", exc)
 
-            if to_stderr and not any(isinstance(item, logging.StreamHandler)
-                                     and not isinstance(item, RingBufferHandler)
-                                     for item in root.handlers):
+            # Track the console handler explicitly: RotatingFileHandler is itself
+            # a StreamHandler subclass, so sniffing by type would see the log file
+            # and silently leave the console with no output at all.
+            if to_stderr and _stream_handler is None:
                 stream = logging.StreamHandler()
                 stream.setFormatter(formatter)
                 root.addHandler(stream)
+                _stream_handler = stream
 
         set_level(level)
         return _ring

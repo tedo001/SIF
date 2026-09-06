@@ -10,6 +10,11 @@ Other pages: [Settings — system logging & MLOps](docs/settings-mlops.png) ·
 [Analytics](docs/analytics.png) · [Batch upload](docs/batch-upload.png) ·
 [Human review queue](docs/review-queue.png).
 
+> **Operating manual:** [INSTRUCTION.md](INSTRUCTION.md) — the rules the system
+> must be used under, step-by-step install and daily process, how to train the
+> model on reviewed labels, and what has to change before it is trusted on live
+> safety data.
+
 ## Run it
 
 ```bash
@@ -175,7 +180,8 @@ disagreement between the two goes to the human review queue.
 | `sif/prototypes.py` | Natural-language label descriptions for zero-shot semantic classification. |
 | `main.py` | PyQt6 layer: `MainWindow`, `AnalysisWorker` (`QThread`), KPI cards, three panels. |
 | `app.py` | Launcher — dependency check, `QApplication` bootstrap, event loop. |
-| `test_sif.py` | 42 unit tests across every stage, the fusion guards and the Qt worker. |
+| `train_model.py` | Command-line trainer: analyse a CSV, train on reviewed labels, log the run to MLflow. |
+| `test_sif.py` | 72 unit tests across every stage, the fusion guards, MLOps, document extraction and the Qt widgets. |
 | `sample_reports.csv` | Six mock rows for the batch-import demo. |
 | `reports/` | Generated analysis report (PDF). |
 
@@ -232,6 +238,6 @@ python -m unittest -v
 ```
 
 On a headless machine prefix with `QT_QPA_PLATFORM=offscreen`. The suite pins the
-offline encoder, so it needs no model download and is deterministic; 64 tests
+offline encoder, so it needs no model download and is deterministic; 72 tests
 cover every stage, the fusion guards, the MLOps round-trip, document extraction
 and the Qt widgets.

@@ -666,6 +666,72 @@ class TestModelInPipeline(unittest.TestCase):
         self.assertIsNone(result.ml_probability)
 
 
+class TestTrainerCLI(unittest.TestCase):
+    """The command-line trainer: corpus reading, label parsing and exit codes."""
+
+    HEADER = "report_id,description,sif_label\n"
+    ROWS = (
+        'R-1,"No harness worn on the scaffold at 6 m.",1\n'
+        'R-2,"Loose plate on the canteen walkway, minor housekeeping.",0\n'
+        'R-3,"Breaker left closed during pump maintenance.",\n'
+        'R-4,"Tanker overspeeding on the field road.",maybe\n'
+    )
+
+    def _corpus(self, folder: str) -> str:
+        path = os.path.join(folder, "reports.csv")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.HEADER + self.ROWS)
+        return path
+
+    def test_reads_narratives_references_and_labels(self) -> None:
+        from train_model import read_corpus
+
+        with tempfile.TemporaryDirectory() as folder:
+            texts, references, labels = read_corpus(self._corpus(folder),
+                                                    label_column="sif_label")
+        self.assertEqual(len(texts), 4)
+        self.assertEqual(references[0], "R-1")
+        # 1 -> positive, 0 -> negative, blank and unrecognised -> unlabelled.
+        self.assertEqual(labels, [1, 0, None, None])
+
+    def test_label_column_is_auto_detected(self) -> None:
+        from train_model import read_corpus
+
+        with tempfile.TemporaryDirectory() as folder:
+            _texts, _refs, labels = read_corpus(self._corpus(folder))
+        self.assertIsNotNone(labels)
+
+    def test_without_labels_none_is_returned(self) -> None:
+        from train_model import read_corpus
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "plain.csv")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("report_id,description\nR-1,No harness on the scaffold.\n")
+            _texts, _refs, labels = read_corpus(path)
+        self.assertIsNone(labels)
+
+    def test_missing_narrative_column_is_rejected(self) -> None:
+        from train_model import read_corpus
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "odd.csv")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("a,b\n1,2\n")
+            with self.assertRaises(ValueError):
+                read_corpus(path)
+
+    def test_dry_run_succeeds_and_bad_input_fails(self) -> None:
+        from train_model import main
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = self._corpus(folder)
+            self.assertEqual(main([path, "--encoder", "hashing", "--dry-run"]), 0)
+            self.assertEqual(main([os.path.join(folder, "nope.csv")]), 1)
+            self.assertEqual(main([path, "--label-column", "absent",
+                                   "--encoder", "hashing"]), 1)
+
+
 class TestTheme(unittest.TestCase):
     """The style sheet must not reference assets that are missing."""
 
