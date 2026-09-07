@@ -349,8 +349,8 @@ class DataTable(QTableWidget):
     """
 
     CENTRED_KEYS = {"_index", "sif_potential", "risk_score", "p_sif", "reference",
-                    "reports", "sif_reports", "sif_rate", "mean_risk", "max_risk",
-                    "confidence", "ml_probability", "rule_confidence"}
+                    "reports", "sif_reports", "sif_rate", "priority", "mean_risk",
+                    "max_risk", "confidence", "ml_probability", "rule_confidence"}
     BAND_KEYS = {"risk_score", "mean_risk", "max_risk", "risk_band"}
 
     def __init__(self, columns: Sequence[Tuple[str, str, int]],
@@ -412,7 +412,9 @@ class DataTable(QTableWidget):
             return "yes" if value else "no"
         if key in {"p_sif", "confidence", "rule_confidence", "ml_probability"}:
             return "-" if value in (None, "") else f"{float(value):.2f}"
-        if key in {"risk_score", "mean_risk", "max_risk", "sif_rate"}:
+        if key in {"sif_rate", "priority"}:
+            return "" if value in (None, "") else f"{float(value):.0f}%"
+        if key in {"risk_score", "mean_risk", "max_risk"}:
             return "" if value in (None, "") else f"{float(value):.1f}"
         if key in {"reference", "review_trigger", "trigger"}:
             return str(value or "-")

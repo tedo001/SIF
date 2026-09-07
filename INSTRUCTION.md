@@ -188,9 +188,19 @@ usually the most actionable: it names the control to fix.
 | **Thin evidence** | Very little extractable text. | Usually a reporting-quality problem: go back to the reporter. |
 | **Unclassified exposure** | High energy, no rule matched. | Vocabulary the system has not seen — candidate for a new pattern (Rule C2). |
 
-**Step 5 — act on hotspots.** A cluster of ≥2 reports at one location, one rule at
-one location, or one barrier repeating is a *system* problem, not an incident.
-Route it to the asset owner.
+**Step 5 — act on hotspots.** A cluster of ≥2 reports sharing a location, an
+activity, a rule-at-a-location or a failing barrier is a *system* problem, not an
+incident. Route it to the asset owner.
+
+Read the two rate columns together:
+
+* **Density** — the share of that group's reports that are SIF-potential. This is
+  the precursor density the intervention should follow.
+* **Priority** — the same figure discounted for how little evidence supports it
+  (Wilson lower bound). Two reports out of two is 100% density but only 34%
+  priority; twenty out of thirty is 67% density and 49% priority, and therefore
+  ranks higher. Sort order follows Priority — act on Density, but check the
+  report count before you commit resources.
 
 **Step 6 — export the record.** `File → Export Results CSV` (Ctrl+S). Every row
 carries its verdict, risk, extracted fields, review trigger and explanation.

@@ -314,8 +314,11 @@ class MainWindow(QMainWindow):
             MATRIX_COLUMNS)
         self.hotspot_view = TableView(
             "Risk Hotspots",
-            "Locations, rule-at-location repeats and barrier failures occurring more than "
-            "once, ranked by SIF count then mean risk.",
+            "Sites, activities, rule-at-location repeats and barrier failures occurring "
+            "more than once, ranked by SIF-precursor density. Density is the share of a "
+            "cluster's reports carrying fatal potential; Priority discounts it for how "
+            "little evidence supports it, so a 2-of-2 cluster cannot outrank a "
+            "well-evidenced one.",
             HOTSPOT_COLUMNS)
         self.review_view = TableView(
             "Human Review Queue",

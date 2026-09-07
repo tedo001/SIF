@@ -5,15 +5,25 @@ times is a system problem. This stage aggregates results across the corpus and
 surfaces where the exposure concentrates, which is the intelligence the
 dashboard exists to show.
 
-Three aggregations, each ranked by SIF-potential count then mean risk:
+Four aggregations, ranked by **SIF-precursor density** - the share of a group's
+reports that carry fatal potential - rather than by raw count, because a site
+with 8 precursors in 400 reports is a different problem from one with 6 in 8:
 
 * **Location hotspots** - where the precursors cluster;
+* **Activity hotspots** - which task carries the fatal potential, wherever it runs;
 * **Rule-at-location patterns** - the same exposure repeating at one site;
 * **Repeat barrier failures** - the control that keeps breaking, wherever it is.
+
+Ranking a rate over small samples needs care: 2 of 2 is 100% and means almost
+nothing. The order therefore uses the **Wilson score lower bound** of the
+proportion, which discounts a rate in proportion to how little evidence supports
+it, and both the raw density and that bound are shown so the ranking can be
+audited rather than trusted.
 """
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, TYPE_CHECKING
@@ -24,6 +34,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["Hotspot", "PatternDetector"]
 
 UNKNOWN_LOCATIONS = {"Location not stated"}
+UNKNOWN_ACTIVITIES = {"Unspecified activity"}
+
+#: z for a 95% one-sided Wilson interval.
+WILSON_Z = 1.96
+
+
+def wilson_lower_bound(successes: int, total: int, z: float = WILSON_Z) -> float:
+    """Lower bound of the 95% Wilson interval for a proportion, as a percentage.
+
+    Used to rank precursor density without letting a two-report group outrank a
+    well-evidenced one: 2/2 scores about 34%, while 20/30 scores about 49%.
+    """
+    if total <= 0:
+        return 0.0
+    phat = successes / total
+    denominator = 1 + z * z / total
+    centre = phat + z * z / (2 * total)
+    margin = z * math.sqrt((phat * (1 - phat) + z * z / (4 * total)) / total)
+    return round(max(0.0, (centre - margin) / denominator) * 100.0, 1)
 
 
 @dataclass
@@ -42,16 +71,21 @@ class Hotspot:
 
     @property
     def sif_rate(self) -> float:
-        """Share of this group's reports that are SIF-potential, as a percentage."""
+        """SIF-precursor density: share of the group's reports that are flagged."""
         return (self.sif_reports / self.reports * 100.0) if self.reports else 0.0
+
+    @property
+    def priority(self) -> float:
+        """Evidence-adjusted density used for ranking (Wilson lower bound)."""
+        return wilson_lower_bound(self.sif_reports, self.reports)
 
     def to_dict(self) -> Dict[str, object]:
         return {
             "kind": self.kind, "label": self.label, "reports": self.reports,
             "sif_reports": self.sif_reports, "sif_rate": round(self.sif_rate, 1),
-            "mean_risk": self.mean_risk, "max_risk": self.max_risk,
-            "top_rule": self.top_rule, "top_barrier": self.top_barrier,
-            "indices": list(self.indices),
+            "priority": self.priority, "mean_risk": self.mean_risk,
+            "max_risk": self.max_risk, "top_rule": self.top_rule,
+            "top_barrier": self.top_barrier, "indices": list(self.indices),
         }
 
 
@@ -62,15 +96,20 @@ class PatternDetector:
     MIN_REPORTS = 2
 
     def detect(self, results: Sequence["PipelineResult"]) -> List[Hotspot]:
-        """Return every hotspot found across ``results``, highest exposure first."""
-        hotspots = (self._group(results, "Location", lambda r: r.location, skip=UNKNOWN_LOCATIONS)
+        """Return every hotspot found across ``results``, densest exposure first."""
+        hotspots = (self._group(results, "Location", lambda r: r.location,
+                                skip=UNKNOWN_LOCATIONS)
+                    + self._group(results, "Activity", lambda r: r.activity,
+                                  skip=UNKNOWN_ACTIVITIES)
                     + self._group(results, "Rule at location",
                                   lambda r: f"{r.iogp_rule} @ {r.location}",
                                   skip=None, require_sif=True)
                     + self._group(results, "Repeat barrier failure",
                                   lambda r: r.barrier_failure.split(";")[0].strip(),
                                   skip={"No barrier failure identified"}))
-        hotspots.sort(key=lambda spot: (-spot.sif_reports, -spot.mean_risk, spot.label))
+        # Density first (evidence-adjusted), then volume, then severity.
+        hotspots.sort(key=lambda spot: (-spot.priority, -spot.sif_reports,
+                                        -spot.mean_risk, spot.label))
         return hotspots
 
     def _group(self, results, kind, key, skip=None, require_sif=False) -> List[Hotspot]:

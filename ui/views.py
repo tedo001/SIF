@@ -50,15 +50,16 @@ MATRIX_COLUMNS: Sequence[Tuple[str, str, int]] = (
 )
 
 HOTSPOT_COLUMNS: Sequence[Tuple[str, str, int]] = (
-    ("Type", "kind", 150),
-    ("Cluster", "label", 330),
-    ("Reports", "reports", 78),
-    ("SIF", "sif_reports", 60),
-    ("SIF %", "sif_rate", 68),
-    ("Mean risk", "mean_risk", 86),
-    ("Peak risk", "max_risk", 86),
-    ("Dominant rule", "top_rule", 190),
-    ("Dominant barrier", "top_barrier", 250),
+    ("Type", "kind", 140),
+    ("Cluster", "label", 300),
+    ("Reports", "reports", 72),
+    ("SIF", "sif_reports", 56),
+    ("Density", "sif_rate", 74),
+    ("Priority", "priority", 74),
+    ("Mean risk", "mean_risk", 84),
+    ("Peak risk", "max_risk", 84),
+    ("Dominant rule", "top_rule", 180),
+    ("Dominant barrier", "top_barrier", 240),
 )
 
 REVIEW_COLUMNS: Sequence[Tuple[str, str, int]] = (

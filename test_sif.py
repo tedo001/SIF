@@ -334,6 +334,37 @@ class TestIntelligence(unittest.TestCase):
         for spot in self.intelligence.hotspots:
             self.assertGreaterEqual(spot.reports, PatternDetector.MIN_REPORTS)
 
+    def test_activities_are_ranked_as_hotspots(self) -> None:
+        kinds = {spot.kind for spot in self.intelligence.hotspots}
+        self.assertIn("Location", kinds)
+        # The problem statement asks for sites *and* activities to be ranked.
+        activity_pipeline = offline_pipeline()
+        results = activity_pipeline.analyze_many([
+            "Near miss during cable jointing at GGS-4: the 11 kV feeder was left "
+            "ungrounded and no LOTO was applied.",
+            "Near miss during cable jointing at the workshop: the panel was still live "
+            "and no isolation certificate was raised.",
+        ])
+        hotspots = activity_pipeline.detector.detect(results)
+        self.assertIn("Activity", {spot.kind for spot in hotspots})
+
+    def test_hotspots_rank_by_evidence_adjusted_density(self) -> None:
+        from sif.patterns import Hotspot, wilson_lower_bound
+
+        # A 2-of-2 group is 100% dense but proves little; a 20-of-30 group proves
+        # more, and must therefore rank higher.
+        thin = Hotspot("Location", "Site A", reports=2, sif_reports=2,
+                       mean_risk=90.0, max_risk=95.0)
+        solid = Hotspot("Location", "Site B", reports=30, sif_reports=20,
+                        mean_risk=70.0, max_risk=99.0)
+        self.assertGreater(thin.sif_rate, solid.sif_rate)
+        self.assertGreater(solid.priority, thin.priority)
+        self.assertEqual(wilson_lower_bound(0, 0), 0.0)
+        self.assertLessEqual(wilson_lower_bound(5, 5), 100.0)
+
+        ordered = sorted([thin, solid], key=lambda spot: (-spot.priority, -spot.sif_reports))
+        self.assertEqual(ordered[0].label, "Site B")
+
     def test_critical_reports_are_queued_for_review(self) -> None:
         queue = self.intelligence.review_queue
         self.assertTrue(queue)
