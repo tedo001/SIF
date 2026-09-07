@@ -71,6 +71,12 @@ class PipelineResult:
     ml_probability: Optional[float] = None
     ml_flag: bool = False
     ml_active: bool = False
+    llm_active: bool = False
+    llm_flag: bool = False
+    llm_rule: str = ""
+    llm_rationale: str = ""
+    source_language: str = ""
+    translated_text: str = ""
     needs_review: bool = False
     review_trigger: str = ""
     review_reason: str = ""
@@ -129,6 +135,9 @@ class SIFPipeline:
         # untyped so the learned layer stays optional and this module never has
         # to import xgboost.
         self._model_provider = model_provider
+        # Optional local LLM (see :mod:`sif.llm`): anything with
+        # .analyze(text) -> LLMOpinion. Absent by default, so nothing changes.
+        self._llm = None
 
         self.preprocessor = NLPPreprocessor()
         self.lexical = LexicalEngine()
@@ -181,11 +190,35 @@ class SIFPipeline:
         """True when a learned model is attached."""
         return self._model_provider is not None
 
+    def attach_llm(self, engine: object) -> None:
+        """Attach a local LLM engine (see :class:`sif.llm.OllamaEngine`).
+
+        Its verdict is recorded and, where it contradicts the pipeline, routed to
+        human review. It never changes the pipeline's own decision, so attaching
+        it cannot alter any existing behaviour.
+        """
+        self._llm = engine
+
+    @property
+    def has_llm(self) -> bool:
+        """True when a local LLM engine is attached."""
+        return self._llm is not None
+
     # -- analysis ----------------------------------------------------------
 
-    def analyze(self, text: str, reference: str = "") -> PipelineResult:
-        """Run every stage over one report."""
+    def analyze(self, text: str, reference: str = "", translated: str = "",
+                source_language: str = "") -> PipelineResult:
+        """Run every stage over one report.
+
+        ``translated`` lets a caller hand in an English rendering of a report
+        written in another language: the analysis runs on that, while
+        ``raw_text`` keeps the original so the audit trail still shows what the
+        reporter actually wrote.
+        """
         started = time.perf_counter()
+        original = text
+        if translated and translated.strip():
+            text = translated
         document = self.preprocessor.process(text)
         lexical = self.lexical.assess(text)
 
@@ -195,6 +228,7 @@ class SIFPipeline:
                 location=lexical.location, barrier_failure=lexical.barrier_failure,
                 energy_source=lexical.energy_source, reference=reference,
                 encoder=self.encoder.info.label(),
+                source_language=source_language,
                 explanation="Empty report - nothing to analyse.",
                 elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
             )
@@ -232,9 +266,12 @@ class SIFPipeline:
             encoder=self.encoder.info.label(),
             elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
             evidence={**evidence.to_dict(), "risk": risk.to_dict()},
-            raw_text=document.raw,
+            raw_text=original.strip() if isinstance(original, str) else "",
+            source_language=source_language,
+            translated_text=text.strip() if translated else "",
         )
         self._apply_model(result)
+        self._apply_llm(result, text)
         trigger, reason = self.reviewer.classify(result)
         result.needs_review = trigger is not None
         result.review_trigger = trigger or ""
@@ -242,15 +279,43 @@ class SIFPipeline:
         return result
 
     def analyze_many(self, texts: Sequence[str],
-                     references: Optional[Sequence[str]] = None) -> List[PipelineResult]:
+                     references: Optional[Sequence[str]] = None,
+                     translations: Optional[Sequence[str]] = None,
+                     source_language: str = "") -> List[PipelineResult]:
         """Analyse a sequence of reports, skipping blank entries."""
         results: List[PipelineResult] = []
         for position, text in enumerate(texts):
             if not isinstance(text, str) or not text.strip():
                 continue
             reference = references[position] if references and position < len(references) else ""
-            results.append(self.analyze(text, reference))
+            translated = (translations[position]
+                          if translations and position < len(translations) else "")
+            results.append(self.analyze(text, reference, translated, source_language))
         return results
+
+    def _apply_llm(self, result: PipelineResult, text: str) -> None:
+        """Record the local LLM's reading, when one is attached."""
+        if self._llm is None:
+            return
+        opinion = self._llm.analyze(text)
+        if not getattr(opinion, "ok", False):
+            result.evidence["llm"] = {"error": getattr(opinion, "error", "unavailable")}
+            return
+        result.llm_active = True
+        result.llm_flag = bool(opinion.sif_potential)
+        result.llm_rule = opinion.iogp_rule
+        result.llm_rationale = opinion.rationale
+        result.evidence["llm"] = {
+            "model": opinion.model,
+            "sif_potential": result.llm_flag,
+            "iogp_rule": opinion.iogp_rule,
+            "activity": opinion.activity,
+            "location": opinion.location,
+            "barrier_failure": opinion.barrier_failure,
+            "rationale": opinion.rationale,
+            "agrees": result.llm_flag == result.sif_potential,
+            "elapsed_ms": opinion.elapsed_ms,
+        }
 
     def _apply_model(self, result: PipelineResult) -> None:
         """Score the result with the learned model, when one is attached."""

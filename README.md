@@ -19,8 +19,25 @@ Other pages: [Settings — system logging & MLOps](docs/settings-mlops.png) ·
 
 ```bash
 pip install -r requirements.txt
-python app.py
+python app.py       # build 1 - the original console
+python app2.py      # build 2 - workflow map, Indian-language OCR, local LLM
 ```
+
+### Two builds
+
+`app.py` is unchanged. `app2.py` is a second front end over the same analysis
+stack, adding four things:
+
+| Addition | What it means |
+| --- | --- |
+| **Workflow map** | The first page maps every capability - ingest, OCR, translate, analyse, dashboard, hotspots, review, learn - with a live status on each and its own control. ![map](docs/app2-workflow.png) |
+| **Indian-language ingestion** | PaddleOCR in Hindi, Marathi, Tamil, Telugu, Kannada, Urdu, Nepali, Sanskrit, Bhojpuri, Maithili and Konkani. Non-English reports are translated to English before analysis, and the original is kept as the audit record. |
+| **Local LLM analyser (Ollama)** | Optional fourth opinion, running on the operator's own machine. It never overrides the pipeline; where it disagrees, the report is queued for a human. |
+| **Separate dashboard, no pictographs** | Metrics and charts live on their own page, away from ingestion and the matrix, and the interface uses no emoji, so it renders identically on a workstation with no emoji font. |
+
+Ollama is optional and not bundled: install it from ollama.com, then
+`ollama pull llama3.2`. Without it, build 2 runs exactly as build 1 does and the
+workflow map says which stage is unavailable and why.
 
 Click **Load 5 Seed Incidents** for an instant demo, or **Batch Import CSV** and
 pick `sample_reports.csv`. The first run downloads the sentence-transformer

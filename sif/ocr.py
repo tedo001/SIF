@@ -29,10 +29,11 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 __all__ = ["ExtractedDocument", "DocumentExtractor", "OCRUnavailable",
-           "TEXT_SUFFIXES", "IMAGE_SUFFIXES"]
+           "TEXT_SUFFIXES", "IMAGE_SUFFIXES", "LANGUAGES", "LANGUAGE_CHOICES",
+           "UNSUPPORTED_LANGUAGES", "resolve_language"]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,64 @@ PDF_SUFFIXES = (".pdf",)
 TEXT_LAYER_MIN_CHARS = 40
 #: Render scale for OCR - 2.0 puts a 12 pt glyph at roughly 24 px tall.
 OCR_RENDER_SCALE = 2.0
+
+
+#: Languages this build of PaddleOCR can recognise, as
+#: ``friendly name -> (paddle language code, script family)``.
+#:
+#: PaddleOCR groups most Indian languages by *script*: one Devanagari model reads
+#: Hindi, Marathi, Nepali, Sanskrit, Bhojpuri, Maithili and Konkani, because they
+#: share glyphs. Tamil, Telugu and Kannada have their own recognisers. The codes
+#: below were read from the installed package rather than assumed - passing a code
+#: it does not know makes PaddleOCR fail at model resolution, not at read time.
+LANGUAGES: Dict[str, Tuple[str, str]] = {
+    "English": ("en", "Latin"),
+    "Hindi / हिन्दी": ("hi", "Devanagari"),
+    "Marathi / मराठी": ("mr", "Devanagari"),
+    "Nepali / नेपाली": ("ne", "Devanagari"),
+    "Sanskrit / संस्कृत": ("sa", "Devanagari"),
+    "Bhojpuri / भोजपुरी": ("bho", "Devanagari"),
+    "Maithili / मैथिली": ("mai", "Devanagari"),
+    "Konkani / कोंकणी": ("gom", "Devanagari"),
+    "Tamil / தமிழ்": ("ta", "Tamil"),
+    "Telugu / తెలుగు": ("te", "Telugu"),
+    "Kannada / ಕನ್ನಡ": ("ka", "Kannada"),
+    "Urdu / اردو": ("ur", "Arabic"),
+}
+
+#: Presented in the interface in this order - English first, then by usage.
+LANGUAGE_CHOICES: Tuple[str, ...] = tuple(LANGUAGES)
+
+#: Indian languages this PaddleOCR build has no recogniser for. Naming them keeps
+#: the interface honest instead of silently reading them with the wrong model.
+UNSUPPORTED_LANGUAGES: Tuple[str, ...] = (
+    "Bengali", "Gujarati", "Punjabi / Gurmukhi", "Malayalam", "Odia", "Assamese",
+)
+
+
+def resolve_language(value: str) -> str:
+    """Return the PaddleOCR code for a friendly name, code, or ISO-ish input.
+
+    Accepts ``"Tamil / தமிழ்"``, ``"tamil"``, ``"ta"`` and ``"kn"`` (the ISO code
+    for Kannada, which PaddleOCR spells ``ka``). Unknown values fall back to
+    English rather than raising, because a wrong dropdown entry should not stop a
+    batch - the result records which language was actually used.
+    """
+    if not value:
+        return "en"
+    text = str(value).strip()
+    if text in LANGUAGES:
+        return LANGUAGES[text][0]
+    lowered = text.lower()
+    aliases = {"kn": "ka", "hin": "hi", "tam": "ta", "tel": "te", "kan": "ka",
+               "mar": "mr", "urd": "ur", "eng": "en", "devanagari": "hi"}
+    if lowered in aliases:
+        return aliases[lowered]
+    for name, (code, _script) in LANGUAGES.items():
+        if lowered == code or lowered == name.split(" / ")[0].lower():
+            return code
+    LOGGER.warning("Unknown OCR language %r - falling back to English", value)
+    return "en"
 
 
 class OCRUnavailable(RuntimeError):
@@ -210,7 +269,10 @@ class DocumentExtractor:
 
     def __init__(self, language: str = "en", enable_ocr: bool = True) -> None:
         self.enable_ocr = enable_ocr
-        self._ocr = PaddleOCRBackend(language=language) if enable_ocr else None
+        #: The friendly name as chosen, and the code actually handed to PaddleOCR.
+        self.language_name = language
+        self.language = resolve_language(language)
+        self._ocr = PaddleOCRBackend(language=self.language) if enable_ocr else None
 
     # -- capability ---------------------------------------------------------
 
@@ -227,9 +289,11 @@ class DocumentExtractor:
                     "(pip install paddleocr paddlepaddle)")
         if self._ocr is not None and self._ocr.failure:
             return f"PaddleOCR installed but not usable - {self._ocr.failure}"
+        script = LANGUAGES.get(self.language_name, (self.language, "Latin"))[1]
+        label = f"{self.language_name} [{self.language}, {script} model]"
         if self._ocr is not None and self._ocr.loaded:
-            return "PaddleOCR ready - scanned PDFs and images can be read"
-        return ("PaddleOCR installed - its models download on first use; "
+            return f"PaddleOCR ready - reading {label}"
+        return (f"PaddleOCR installed for {label}; models download on first use - "
                 "run 'Check OCR availability' to confirm this machine can fetch them")
 
     # -- extraction ---------------------------------------------------------

@@ -135,6 +135,14 @@ the rule, energy, failed barrier, activity, location, the decision path and the
 cues. That is the Rule R4 check, and it is also how you learn to distrust the
 tool at the right moments.
 
+**Step 4b — build 2 only: pick the report language.** *Ingest and OCR* → **OCR
+language**. English, Hindi, Marathi, Tamil, Telugu, Kannada, Urdu, Nepali,
+Sanskrit, Bhojpuri, Maithili and Konkani are supported by this PaddleOCR build;
+Bengali, Gujarati, Punjabi, Malayalam, Odia and Assamese are not, and the page
+says so rather than reading them with the wrong model. Leave **translate to
+English** ticked if Ollama is running - the analysers are English, and the
+original narrative is still kept as the audit record.
+
 **Step 5 — choose the encoder deliberately** (ingestion panel):
 
 | Choice | Use when |
@@ -468,7 +476,8 @@ Run before first use, after any change, and after any environment move.
 
 | Command | Purpose |
 | --- | --- |
-| `python app.py` | Run the console |
+| `python app.py` | Run the console (build 1) |
+| `python app2.py` | Run build 2 - workflow map, Indian-language OCR, local LLM |
 | `python -m unittest -q` | Full test suite |
 | `python train_model.py <csv> [--label-column …]` | Train from a file |
 | `python -m sif.pipeline` | Analyse the seed incidents on the command line |
@@ -479,6 +488,8 @@ Run before first use, after any change, and after any environment move.
 | Variable | Values | Effect |
 | --- | --- | --- |
 | `SIF_ENCODER` | `auto` \| `transformer` \| `hashing` | Encoder backend (an explicit choice in the app always wins) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Where build 2 looks for the local LLM |
+| `SIF_LLM_MODEL` | e.g. `llama3.2` | Which Ollama model to ask |
 | `SIF_ENCODER_MODEL` | hub id or local directory | Which sentence-transformer to load |
 | `QT_QPA_PLATFORM` | `offscreen` | Headless runs (tests, CI) |
 

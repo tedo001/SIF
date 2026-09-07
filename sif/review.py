@@ -33,8 +33,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["ReviewItem", "ReviewQueue"]
 
-PRIORITY_ORDER = {"Disagreement": 0, "Model disagreement": 1, "Critical risk": 2,
-                  "Thin evidence": 3, "Unclassified exposure": 4}
+PRIORITY_ORDER = {"Disagreement": 0, "Model disagreement": 1, "LLM disagreement": 2,
+                  "Critical risk": 3, "Thin evidence": 4, "Unclassified exposure": 5}
 
 
 @dataclass
@@ -100,6 +100,11 @@ class ReviewQueue:
             return "Model disagreement", (
                 f"the trained model puts P(SIF) at {result.ml_probability:.2f}, "
                 f"{direction} the pipeline verdict - check which is right and label it")
+        if result.llm_active and result.llm_flag != result.sif_potential:
+            side = "flags" if result.llm_flag else "clears"
+            return "LLM disagreement", (
+                f"the local model {side} this report against the pipeline verdict"
+                + (f" - {result.llm_rationale}" if result.llm_rationale else ""))
         if result.risk_band == ReviewQueue.CRITICAL_BAND:
             return "Critical risk", (
                 f"risk {result.risk_score:.0f}/100 - verify before it drives an intervention")
