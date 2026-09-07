@@ -279,21 +279,21 @@ rx, rw = 6.85, 6.05
 section(s3, rx, y, rw, "METHODOLOGY")
 bullet_rows(s3, rx, y + 0.3, rw, [
     ("Rules first —", "auditable deterministic backbone"),
-    ("Semantics second —", "zero-shot prototypes lift recall on paraphrase"),
+    ("Semantics second —", "zero-shot prototypes lift recall"),
     ("Model third —", "XGBoost opinion, MLflow-tracked, never an override"),
     ("Loop closed —", "expert review produces the labels for retraining"),
-], row_h=0.44, gap=0.05, colour=NAVY)
+], row_h=0.50, gap=0.05, colour=NAVY)
 
-card(s3, rx, 6.12, rw, 0.62, fill=RGBColor(0xEC, 0xF7, 0xF1),
+card(s3, rx, 6.34, rw, 0.62, fill=RGBColor(0xEC, 0xF7, 0xF1),
      line=RGBColor(0xBF, 0xE4, 0xD3))
-frame = textbox(s3, rx + 0.16, 6.20, rw - 0.32, 0.5)
+frame = textbox(s3, rx + 0.16, 6.42, rw - 0.32, 0.5)
 write(frame, [
     ("Guardrail: ", 10, True, GREEN, 0),
 ])
 para = frame.paragraphs[0]
 run = para.add_run()
-run.text = ("if an encoder scores every prototype alike, its ranking is ignored and the "
-            "rules decide — verified against a deliberately degenerate model.")
+run.text = ("if an encoder scores every prototype alike, its ranking is ignored "
+            "and the rules decide.")
 run.font.size = Pt(9.5)
 run.font.color.rgb = INK
 run.font.name = FONT
