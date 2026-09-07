@@ -28,13 +28,17 @@ from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -45,8 +49,11 @@ from sif.llm import OllamaEngine, looks_non_latin
 from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
                                log_file_path, set_level)
 from sif.mlops import MLOpsService
+from sif import prefs
 from sif.ocr import LANGUAGE_CHOICES, UNSUPPORTED_LANGUAGES, DocumentExtractor
 from sif.pipeline import PipelineResult
+from sif.updater import UpdateChecker, UpdateInfo
+from sif.version import describe
 from ui.theme import C, STYLESHEET
 from ui.views import HOTSPOT_COLUMNS, REVIEW_COLUMNS, AnalyticsView, TableView
 from ui2.components import HeaderBar, Sidebar
@@ -54,12 +61,15 @@ from ui2.views import DashboardView, EnginesView, IngestView, ReportView, Settin
 from ui2.workflow import WorkflowMap
 
 __all__ = ["AnalysisWorker", "ExtractionWorker", "TrainingWorker", "ProbeWorker",
-           "MainWindow", "create_application"]
+           "UpdateWorker", "DownloadWorker", "UpdateDialog", "MainWindow",
+           "create_application"]
 
 LOGGER = logging.getLogger("sif.app2")
 
 APP_NAME = "SIF Insight Console"
 APP_SUBTITLE = "UA/UC and near-miss intelligence   |   PS 26165   |   build 2"
+#: Wait before the start-up update check so it never competes with first paint.
+UPDATE_CHECK_DELAY_MS = 4000
 
 NAV_ITEMS = (
     ("workflow", "Workflow map"),
@@ -217,6 +227,132 @@ class ProbeWorker(QThread):
         self.probed.emit(self._name, bool(ok), str(message))
 
 
+class UpdateWorker(QThread):
+    """Ask GitHub whether a newer release exists, off the GUI thread."""
+
+    checked = pyqtSignal(object)
+
+    def __init__(self, checker: UpdateChecker, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._checker = checker
+
+    def run(self) -> None:  # noqa: D102 - documented on the class
+        self.checked.emit(self._checker.check())
+
+
+class DownloadWorker(QThread):
+    """Download and verify an installer, reporting progress."""
+
+    progress = pyqtSignal(int, int)
+    finished_path = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, checker: UpdateChecker, info: UpdateInfo,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._checker = checker
+        self._info = info
+
+    def run(self) -> None:  # noqa: D102 - documented on the class
+        try:
+            path = self._checker.download(self._info, progress=self.progress.emit)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised into Qt
+            LOGGER.warning("Update download failed: %s", exc)
+            self.failed.emit(str(exc))
+            return
+        self.finished_path.emit(path)
+
+
+class UpdateDialog(QDialog):
+    """Offers the update, downloads it on request, and never installs silently."""
+
+    def __init__(self, info: UpdateInfo, checker: UpdateChecker,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.info = info
+        self.checker = checker
+        self.worker: Optional[DownloadWorker] = None
+        self.installer_path = ""
+
+        self.setWindowTitle("Update available")
+        self.setMinimumWidth(560)
+
+        headline = QLabel(f"Version {info.latest} is available. You are running "
+                          f"{info.current}.")
+        headline.setStyleSheet("font-size: 14px; font-weight: 700;")
+        detail = QLabel(f"{info.asset.name}  ·  {info.asset.megabytes} MB"
+                        if info.asset else "No installer was published for this platform.")
+        detail.setObjectName("Faint")
+
+        notes = QTextEdit()
+        notes.setReadOnly(True)
+        notes.setPlainText(info.notes or "No release notes were published.")
+        notes.setFixedHeight(150)
+
+        self.status = QLabel("The download is checked against the release checksum "
+                             "before anything is installed.")
+        self.status.setObjectName("Muted")
+        self.status.setWordWrap(True)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+
+        buttons = QDialogButtonBox()
+        self.install_button = buttons.addButton("Download and install",
+                                                QDialogButtonBox.ButtonRole.AcceptRole)
+        self.later_button = buttons.addButton("Later", QDialogButtonBox.ButtonRole.RejectRole)
+        self.skip_button = buttons.addButton(f"Skip {info.latest}",
+                                             QDialogButtonBox.ButtonRole.DestructiveRole)
+        self.install_button.setEnabled(bool(info.asset))
+        self.install_button.clicked.connect(self.start_download)
+        self.later_button.clicked.connect(self.reject)
+        self.skip_button.clicked.connect(self._skip)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(8)
+        layout.addWidget(headline)
+        layout.addWidget(detail)
+        layout.addWidget(notes)
+        layout.addWidget(self.status)
+        layout.addWidget(self.progress)
+        layout.addWidget(buttons)
+
+    def _skip(self) -> None:
+        prefs.set_value("skip_version", self.info.latest)
+        LOGGER.info("Operator chose to skip version %s", self.info.latest)
+        self.reject()
+
+    def start_download(self) -> None:
+        """Fetch the installer; the dialog stays open until it is verified."""
+        self.install_button.setEnabled(False)
+        self.skip_button.setEnabled(False)
+        self.progress.setVisible(True)
+        self.status.setText("Downloading...")
+        self.worker = DownloadWorker(self.checker, self.info, parent=self)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.finished_path.connect(self._on_downloaded)
+        self.worker.failed.connect(self._on_failed)
+        self.worker.start()
+
+    def _on_progress(self, done: int, total: int) -> None:
+        self.progress.setMaximum(max(total, 1))
+        self.progress.setValue(done)
+        if total:
+            self.status.setText(f"Downloading... {done * 100 // total}%")
+
+    def _on_downloaded(self, path: str) -> None:
+        self.installer_path = path
+        self.status.setText("Checksum verified. The console will close so the installer "
+                            "can replace it.")
+        self.accept()
+
+    def _on_failed(self, message: str) -> None:
+        self.progress.setVisible(False)
+        self.install_button.setEnabled(True)
+        self.skip_button.setEnabled(True)
+        self.status.setText(f"Update refused: {message}")
+
+
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
@@ -244,6 +380,8 @@ class MainWindow(QMainWindow):
         self.translate_enabled = True
         self.language = LANGUAGE_CHOICES[0]
 
+        self.updater = UpdateChecker()
+        self.update_worker: Optional[UpdateWorker] = None
         self.rows: List[Dict[str, object]] = []
         self.documents: List[Dict[str, object]] = []
         self.pending_blocks: List[str] = []
@@ -264,6 +402,11 @@ class MainWindow(QMainWindow):
         self.log_timer = QTimer(self)
         self.log_timer.timeout.connect(self._refresh_logs)
         self.log_timer.start(self.LOG_REFRESH_MS)
+
+        # Check for a new release shortly after start-up, quietly: if there is
+        # nothing new, or no network, the operator never sees a thing.
+        if prefs.get("check_updates", True):
+            QTimer.singleShot(UPDATE_CHECK_DELAY_MS, lambda: self.check_for_updates(False))
 
     # -- construction ------------------------------------------------------
 
@@ -348,6 +491,14 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        help_menu = self.menuBar().addMenu("&Help")
+        update_action = QAction("Check for &updates...", self)
+        update_action.triggered.connect(lambda: self.check_for_updates(True))
+        help_menu.addAction(update_action)
+        about_action = QAction("&About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
 
     def _connect(self) -> None:
         self.ingest_view.analyse_requested.connect(self.analyse_text)
@@ -648,6 +799,64 @@ class MainWindow(QMainWindow):
         LOGGER.info("MLflow tracking set to %s (experiment '%s')",
                     self.mlops.tracker.tracking_uri, self.mlops.tracker.experiment)
         self._refresh_engines()
+
+    # -- updates -----------------------------------------------------------
+
+    def check_for_updates(self, interactive: bool) -> None:
+        """Ask GitHub for a newer release.
+
+        ``interactive`` is True when the operator asked, in which case "you are up
+        to date" is worth saying; the start-up check stays silent unless there is
+        something to offer.
+        """
+        if self.update_worker is not None and self.update_worker.isRunning():
+            return
+        self._interactive_update = interactive
+        if interactive:
+            self._set_status("Checking for updates")
+        self.update_worker = UpdateWorker(self.updater, parent=self)
+        self.update_worker.checked.connect(self.on_update_checked)
+        self.update_worker.start()
+
+    def on_update_checked(self, info: UpdateInfo) -> None:
+        """Slot: the update check finished."""
+        interactive = getattr(self, "_interactive_update", False)
+        LOGGER.info("Update check: %s", info.summary())
+        self._set_status(info.summary())
+
+        if info.error or not info.available:
+            if interactive:
+                QMessageBox.information(self, APP_NAME, info.summary())
+            return
+        if prefs.get("skip_version") == info.latest and not interactive:
+            LOGGER.info("Version %s was skipped by the operator", info.latest)
+            return
+        if not info.installable:
+            # A source checkout, or no asset for this platform: say so, do not offer.
+            if interactive:
+                QMessageBox.information(self, APP_NAME, info.summary())
+            return
+
+        dialog = UpdateDialog(info, self.updater, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.installer_path:
+            if self.updater.launch(dialog.installer_path):
+                LOGGER.info("Closing so the installer can run")
+                self.close()
+            else:
+                QMessageBox.warning(
+                    self, APP_NAME,
+                    "The installer was downloaded and verified but could not be "
+                    f"started. Run it manually:\n{dialog.installer_path}")
+
+    def show_about(self) -> None:
+        """Version and provenance, which is what a support call asks for first."""
+        QMessageBox.information(
+            self, APP_NAME,
+            f"{APP_NAME} (build 2)\n"
+            f"Version {describe()}\n\n"
+            "Oil India Limited - Problem Statement 26165\n"
+            f"Updates: {self.updater.repository}\n\n"
+            "Prototype output - for review, not a statutory record.")
 
     # -- worker plumbing ---------------------------------------------------
 

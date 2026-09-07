@@ -1,0 +1,15 @@
+# Runtime dependencies for the packaged installer (the "slim" bundle).
+#
+# Deliberately excludes torch, sentence-transformers, xgboost, mlflow and
+# paddleocr: they add ~3 GB to a PyInstaller bundle, which is not something to
+# push down a plant network on every release. The packaged console therefore
+# ships with the deterministic rule engine, PDF text-layer ingestion and the full
+# interface; an operator who needs the semantic encoder, the learned model or
+# scanned-page OCR installs those extras once, with:
+#
+#     pip install -r requirements.txt
+#
+# and the console detects them at run time - see the Engines page.
+PyQt6>=6.5
+numpy>=1.24
+pypdfium2>=4.0

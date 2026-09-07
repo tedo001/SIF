@@ -183,6 +183,16 @@ patterns missed — so recall only grows. Two guards keep that honest:
 Every result records which path decided it (`evidence.decision_path`), and any
 disagreement between the two goes to the human review queue.
 
+## Releases and updates
+
+Pushing a version tag builds installers for Windows, macOS and Linux and
+publishes a GitHub Release; the app checks for it and offers the update. See
+[RELEASING.md](RELEASING.md).
+
+```bash
+git tag -a v2.1.0 -m "..." && git push origin v2.1.0
+```
+
 ## Module map
 
 | File | Responsibility |
@@ -198,6 +208,9 @@ disagreement between the two goes to the human review queue.
 | `main.py` | PyQt6 layer: `MainWindow`, `AnalysisWorker` (`QThread`), KPI cards, three panels. |
 | `app.py` | Launcher — dependency check, `QApplication` bootstrap, event loop. |
 | `train_model.py` | Command-line trainer: analyse a CSV, train on reviewed labels, log the run to MLflow. |
+| `sif/updater.py` | Checks GitHub Releases, verifies the download's checksum, launches the installer. |
+| `sif/version.py` | The one place the version lives; CI stamps it from the git tag. |
+| `packaging/`, `.github/workflows/release.yml` | PyInstaller spec, Inno Setup script, tag-driven release pipeline. |
 | `test_sif.py` | 72 unit tests across every stage, the fusion guards, MLOps, document extraction and the Qt widgets. |
 | `sample_reports.csv` | Six mock rows for the batch-import demo. |
 | `reports/` | Generated analysis report (PDF). |

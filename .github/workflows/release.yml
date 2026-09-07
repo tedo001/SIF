@@ -1,0 +1,200 @@
+# Tag-driven release: build the installers, publish them, and let the app find them.
+#
+#   git tag -a v2.1.0 -m "..." && git push origin v2.1.0
+#
+# The tag is the single source of truth for the version: it is stamped into
+# sif/version.py before packaging, so the running app, the installer metadata and
+# the tag can never disagree. Nothing is published unless the tests pass first.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build, e.g. v2.1.0 (dry run - no release published)"
+        required: true
+        default: "v0.0.0-test"
+      variant:
+        description: "Bundle variant"
+        required: true
+        default: "slim"
+        type: choice
+        options: [slim, full]
+
+permissions:
+  contents: write        # needed to create the release; nothing else
+
+env:
+  PYTHON_VERSION: "3.11"
+  VARIANT: ${{ github.event.inputs.variant || 'slim' }}
+
+jobs:
+  # ---------------------------------------------------------------- tests
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-app.txt
+      - name: Run the suites headless
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SIF_ENCODER: hashing          # deterministic: no model download in CI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libxkbcommon-x11-0 libgl1 libdbus-1-3
+          python -m unittest discover -p "test_*.py" -v
+
+  # ------------------------------------------------------------- packaging
+  build:
+    name: Build ${{ matrix.label }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+          - os: macos-latest
+            label: macos
+          - os: ubuntu-22.04          # oldest supported glibc for the tarball
+            label: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Resolve the version from the tag
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG (variant: $VARIANT)"
+
+      - name: Stamp the version into the package
+        shell: bash
+        run: |
+          python packaging/stamp_version.py "${{ steps.version.outputs.tag }}" \
+                 --build "${GITHUB_SHA::7}"
+          python -c "from sif.version import describe; print('stamped', describe())"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-app.txt pyinstaller==6.11.1
+          if [ "$VARIANT" = "full" ]; then pip install -r requirements.txt; fi
+
+      - name: Build the bundle
+        shell: bash
+        env:
+          SIF_BUILD_VARIANT: ${{ env.VARIANT }}
+          SIF_VERSION: ${{ steps.version.outputs.version }}
+        run: pyinstaller packaging/sif_console.spec --noconfirm --distpath dist --workpath build
+
+      # ---- Windows: Inno Setup installer -------------------------------
+      - name: Build the Windows installer
+        if: matrix.label == 'windows'
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-Not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" packaging\installer.iss
+          Get-ChildItem dist\installer
+
+      # ---- macOS: disk image -------------------------------------------
+      - name: Build the macOS disk image
+        if: matrix.label == 'macos'
+        run: |
+          mkdir -p dist/installer
+          hdiutil create -volname "SIF Insight Console" \
+            -srcfolder "dist/SIF Insight Console.app" -ov -format UDZO \
+            "dist/installer/SIF-Console-${{ steps.version.outputs.version }}.dmg"
+          ls -lh dist/installer
+
+      # ---- Linux: relocatable tarball ----------------------------------
+      - name: Build the Linux tarball
+        if: matrix.label == 'linux'
+        run: |
+          mkdir -p dist/installer
+          tar -C dist -czf \
+            "dist/installer/SIF-Console-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz" \
+            SIFConsole
+          ls -lh dist/installer
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.label }}
+          path: dist/installer/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # --------------------------------------------------------------- release
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')     # dispatch runs are dry runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: installer-*
+          merge-multiple: true
+
+      - name: Checksum every asset
+        working-directory: artifacts
+        run: |
+          ls -lh
+          sha256sum * > SHA256SUMS.txt          # the updater refuses anything unlisted
+          cat SHA256SUMS.txt
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "## SIF Insight Console ${TAG}"
+            echo
+            echo "Installers are verified by \`SHA256SUMS.txt\`; the in-app updater"
+            echo "refuses any download whose checksum does not match."
+            echo
+            echo "| Platform | File |"
+            echo "| --- | --- |"
+            echo "| Windows | \`SIF-Console-*-setup.exe\` |"
+            echo "| macOS | \`SIF-Console-*.dmg\` |"
+            echo "| Linux | \`SIF-Console-*-linux-x86_64.tar.gz\` |"
+            echo
+            echo "The packaged build ships the interface and the deterministic rule"
+            echo "engine. For the semantic encoder, the learned model or scanned-page"
+            echo "OCR, run \`pip install -r requirements.txt\` - the console detects"
+            echo "them at run time and reports what is available on the Engines page."
+          } > notes.md
+          gh release create "$TAG" artifacts/* \
+             --repo "$GITHUB_REPOSITORY" \
+             --title "SIF Insight Console $TAG" \
+             --notes-file notes.md \
+             --verify-tag
