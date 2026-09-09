@@ -439,11 +439,34 @@ class DataTable(QTableWidget):
             item.setForeground(QColor(BAND_COLORS.get(str(band), C.OK)))
         elif key in {"review_trigger", "trigger"}:
             item.setForeground(QColor(C.WARN if payload.get(key) else C.TEXT_FAINT))
+        elif key in {"status", "decision_label", "outcome"}:
+            item.setForeground(QColor(DataTable._decision_colour(str(payload.get(key, "")))))
         elif key == "level":
             level = str(payload.get("level", ""))
             item.setForeground(QColor({"ERROR": C.DANGER, "CRITICAL": C.DANGER,
                                        "WARNING": C.WARN, "DEBUG": C.TEXT_FAINT}
                                       .get(level, C.INFO)))
+
+    @staticmethod
+    def _decision_colour(text: str) -> str:
+        """Colour for a review status, read from its wording.
+
+        The review bench and its audit trail phrase the same outcome differently
+        ("confirmed" in the queue, "SIF potential confirmed" in the trail), so the
+        colour is chosen from the words rather than from an exact value.
+        """
+        lowered = text.lower()
+        if not lowered.strip():
+            return C.TEXT_FAINT
+        if "overturn" in lowered:
+            return C.PURPLE
+        if "unclear" in lowered:
+            return C.WARN
+        if "not sif" in lowered or "rejected" in lowered:
+            return C.OK
+        if "confirm" in lowered:
+            return C.DANGER
+        return C.TEXT_DIM
 
 
 class FieldRow(QWidget):

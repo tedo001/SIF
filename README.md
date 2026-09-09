@@ -31,6 +31,7 @@ stack, adding four things:
 | Addition | What it means |
 | --- | --- |
 | **Workflow map** | The first page maps every capability - ingest, OCR, translate, analyse, dashboard, hotspots, review, learn - with a live status on each and its own control. ![map](docs/app2-workflow.png) |
+| **Review bench** | The queue on the left, the whole case on the right, and three keys to decide it. Decisions persist as they are made, keep an audit trail, and become the labels the model trains on. ![review bench](docs/review-bench.png) |
 | **Indian-language ingestion** | PaddleOCR in Hindi, Marathi, Tamil, Telugu, Kannada, Urdu, Nepali, Sanskrit, Bhojpuri, Maithili and Konkani. Non-English reports are translated to English before analysis, and the original is kept as the audit record. |
 | **Local LLM analyser (Ollama)** | Optional fourth opinion, running on the operator's own machine. It never overrides the pipeline; where it disagrees, the report is queued for a human. |
 | **Separate dashboard, no pictographs** | Metrics and charts live on their own page, away from ingestion and the matrix, and the interface uses no emoji, so it renders identically on a workstation with no emoji font. |
@@ -140,7 +141,7 @@ console runs on the rule and semantic paths and the Settings tab says so; withou
 | 4. Evidence engine | `sif/evidence.py` | Collects lexical cues, nearest semantic prototypes with scores, per-field provenance and the decision path, then writes the one-line explanation shown in the UI. |
 | 5. Risk score | `sif/scoring.py` | `100 × P(SIF) × energy severity × barrier criticality × evidence factor`, banded Critical / High / Medium / Low. Ordinal, for ranking a queue — not an actuarial probability. |
 | 6a. Pattern detection | `sif/patterns.py` | Location, activity, rule-at-location and repeat-barrier clusters (≥2 reports), ranked by **SIF-precursor density** — the share of a group's reports carrying fatal potential — discounted by a Wilson lower bound so a 2-of-2 group cannot outrank a well-evidenced one. |
-| 6b. Human review | `sif/review.py` | Queues what a person must verify: model/rule **disagreement**, **critical risk**, **thin evidence**, or **high energy with no rule match**. |
+| 6b. Human review | `sif/review.py` | Queues what a person must verify: model/rule **disagreement**, **critical risk**, **thin evidence**, **high energy with no rule match**, or **energy with no barrier found**. Records the expert's decision, persists it, and hands it back as the labels training uses. |
 | 7. Dashboard | `main.py` + `ui/` | Sidebar navigation, KPI tiles, painted charts, the three result tables, evidence panel and Settings. |
 
 ### The learned layer (MLOps)
@@ -211,8 +212,11 @@ git tag -a v2.1.0 -m "..." && git push origin v2.1.0
 | `sif/updater.py` | Checks GitHub Releases, verifies the download's checksum, launches the installer. |
 | `sif/version.py` | The one place the version lives; CI stamps it from the git tag. |
 | `packaging/`, `.github/workflows/release.yml` | PyInstaller spec, Inno Setup script, tag-driven release pipeline. |
-| `test_sif.py` | 72 unit tests across every stage, the fusion guards, MLOps, document extraction and the Qt widgets. |
+| `test_sif.py` | 74 unit tests across every stage, the fusion guards, MLOps, document extraction and the Qt widgets. |
+| `test_app2.py` | 57 tests for build 2: language handling, the local LLM, the workflow map, the review bench and the decision log. |
+| `test_release.py` | 23 tests for versioning, the update checker and the release pipeline. |
 | `sample_reports.csv` | Six mock rows for the batch-import demo. |
+| `samples/` | Test material for every ingestion path - an 18-report CSV, a shift log, a text-layer PDF, a scan with no text layer, and reports in five Indian languages. See `samples/README.md`. |
 | `reports/` | Generated analysis report (PDF). |
 
 ## Result fields

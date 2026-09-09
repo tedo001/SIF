@@ -6,20 +6,24 @@ These cover what ``app2.py`` adds. The original build keeps its own suite in
 
 from __future__ import annotations
 
+import csv
 import json
 import os
+import tempfile
 import re
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import List
 
 from sif.encoders import HashingEncoder
 from sif.llm import OllamaEngine, looks_non_latin
 from sif.ocr import (LANGUAGE_CHOICES, LANGUAGES, UNSUPPORTED_LANGUAGES,
                      DocumentExtractor, resolve_language)
-from sif.pipeline import SIFPipeline
-from sif.review import ReviewQueue
+from sif.pipeline import PipelineResult, SIFPipeline
+from sif.review import (DECISION_SHORT, DecisionLog, ReviewDecision, ReviewQueue,
+                        fingerprint)
 
 try:
     import PyQt6.QtWidgets  # noqa: F401
@@ -311,9 +315,9 @@ class TestWorkflowAndInterface(unittest.TestCase):
     def test_the_interface_carries_no_pictographs(self) -> None:
         """Build 2 must render on a workstation with no emoji font."""
         import main2
-        from ui2 import components, views, workflow
+        from ui2 import components, review, views, workflow
 
-        for module in (main2, components, views, workflow):
+        for module in (main2, components, views, workflow, review):
             with open(module.__file__, encoding="utf-8") as handle:
                 source = handle.read()
             found = EMOJI.findall(source)
@@ -339,6 +343,352 @@ class TestWorkflowAndInterface(unittest.TestCase):
         self.assertTrue(hasattr(build_one, "MainWindow"))
         with open(app.__file__, encoding="utf-8") as handle:
             self.assertNotIn("main2", handle.read())
+
+
+def _result(reference: str, text: str, **fields) -> PipelineResult:
+    """A minimal analysed result, for tests that only care about review."""
+    defaults = dict(sif_potential=False, iogp_rule="Energy Isolation", activity="maintenance",
+                    location="Pump station", barrier_failure="none", energy_source="electrical")
+    defaults.update(fields)
+    return PipelineResult(reference=reference, raw_text=text, **defaults)
+
+
+class TestReviewDecisions(unittest.TestCase):
+    """The record an expert leaves behind, and what training reads back."""
+
+    def setUp(self) -> None:
+        self.folder = tempfile.mkdtemp(prefix="sif-review-")
+        self.log = DecisionLog(os.path.join(self.folder, "decisions.json"))
+        self.critical = _result("NM-1", "Cable left ungrounded with no LOTO applied",
+                                sif_potential=True, risk_score=91.0, risk_band="Critical")
+        self.thin = _result("NM-2", "Observation raised during the round", confidence=0.1)
+
+    def test_fingerprint_survives_reformatting_but_separates_reports(self) -> None:
+        """A decision must follow the report, not its row number or its whitespace."""
+        same = _result("NM-1", "  Cable left   ungrounded with no LOTO   applied\n")
+        self.assertEqual(fingerprint(self.critical), fingerprint(same))
+        self.assertNotEqual(fingerprint(self.critical), fingerprint(self.thin))
+
+    def test_a_decision_reaches_disk_immediately(self) -> None:
+        self.log.record(self.critical, "confirmed", reviewer="A. Reviewer", note="no isolation")
+        self.assertTrue(os.path.isfile(self.log.path))
+        reloaded = DecisionLog(self.log.path).load()
+        standing = reloaded.for_result(self.critical)
+        self.assertEqual(standing.decision, "confirmed")
+        self.assertEqual(standing.reviewer, "A. Reviewer")
+        self.assertEqual(standing.note, "no isolation")
+        self.assertTrue(standing.decided_at, "the record must carry its own timestamp")
+
+    def test_unclear_is_recorded_but_never_becomes_a_label(self) -> None:
+        self.log.record(self.critical, "unclear", reviewer="A")
+        self.log.record(self.thin, "rejected", reviewer="A")
+        chosen, labels = self.log.labels_for([self.critical, self.thin])
+        self.assertEqual([item.reference for item in chosen], ["NM-2"])
+        self.assertEqual(labels, [0])
+        self.assertEqual(self.log.counts()["decided"], 2)
+        self.assertEqual(self.log.counts()["labels"], 1)
+
+    def test_an_unreviewed_report_is_never_guessed_at(self) -> None:
+        chosen, labels = self.log.labels_for([self.critical, self.thin])
+        self.assertEqual((chosen, labels), ([], []))
+
+    def test_changing_a_decision_supersedes_without_erasing(self) -> None:
+        self.log.record(self.critical, "confirmed", reviewer="A")
+        self.log.record(self.critical, "rejected", reviewer="B")
+        self.assertEqual(self.log.for_result(self.critical).decision, "rejected")
+        self.assertEqual(len(self.log.entries), 2, "the first call stays in the trail")
+        self.assertEqual(self.log.counts()["revisions"], 1)
+
+    def test_overturning_the_engine_is_recorded_as_such(self) -> None:
+        entry = self.log.record(self.critical, "rejected", reviewer="A")
+        self.assertTrue(entry.overturns_engine)
+        self.assertFalse(self.log.record(self.critical, "confirmed").overturns_engine)
+
+    def test_undo_withdraws_only_the_last_entry(self) -> None:
+        self.log.record(self.critical, "confirmed")
+        self.log.record(self.thin, "rejected")
+        withdrawn = self.log.undo()
+        self.assertEqual(withdrawn.reference, "NM-2")
+        self.assertIsNone(self.log.for_result(self.thin))
+        self.assertIsNotNone(self.log.for_result(self.critical))
+        self.log.undo()
+        self.assertIsNone(self.log.undo(), "undoing an empty log is not an error")
+
+    def test_export_carries_the_whole_trail(self) -> None:
+        self.log.record(self.critical, "confirmed", reviewer="A", note="verified on site")
+        self.log.record(self.critical, "rejected", reviewer="B")
+        path = self.log.export_csv(os.path.join(self.folder, "trail.csv"))
+        with open(path, encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["decision"], "confirmed")
+        self.assertEqual(rows[0]["note"], "verified on site")
+        self.assertIn("fingerprint", rows[0])
+
+    def test_a_read_only_location_is_reported_not_raised(self) -> None:
+        """An expert must never believe a decision was saved when it was not."""
+        log = DecisionLog(os.path.join(self.folder, "nope", "\0", "decisions.json"))
+        log.record(self.critical, "confirmed")
+        self.assertFalse(log.saved)
+        self.assertEqual(len(log.entries), 1, "it is still held for this session")
+
+    def test_a_corrupt_file_reads_as_empty(self) -> None:
+        with open(self.log.path, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        self.assertEqual(DecisionLog(self.log.path).load().entries, [])
+
+    def test_an_unknown_decision_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            ReviewDecision(fingerprint="x", reference="NM-1", decision="probably")
+
+    def test_decided_reports_leave_the_queue(self) -> None:
+        results = [self.critical, self.thin]
+        queue = ReviewQueue()
+        self.assertEqual(len(queue.build(results)), 2)
+        self.log.record(self.critical, "confirmed")
+        remaining = queue.build(results, skip=self.log.decided())
+        self.assertEqual([item.reference for item in remaining], ["NM-2"])
+        self.assertEqual(len(queue.build(results)), 2, "the queue itself is unchanged")
+
+
+class TestEnergyWithoutBarrierTrigger(unittest.TestCase):
+    """P(SIF) is energy x barrier, so a missing barrier scores zero - and hides."""
+
+    def test_high_energy_with_no_barrier_reaches_a_person(self) -> None:
+        result = _result("NM-3", "Lanyard clipped to the handrail at eighteen metres",
+                         high_energy=True, barrier_failed=False, confidence=0.7,
+                         iogp_rule="Working at Height", energy_source="Gravity / Fall")
+        trigger, reason = ReviewQueue.classify(result)
+        self.assertEqual(trigger, "Energy, no barrier")
+        self.assertIn("Working at Height", reason)
+        self.assertIn("confirm the barrier held", reason)
+
+    def test_a_flagged_report_is_not_queued_twice_for_it(self) -> None:
+        result = _result("NM-4", "No LOTO applied to the live feeder", sif_potential=True,
+                         high_energy=True, barrier_failed=True, risk_band="Critical")
+        self.assertEqual(ReviewQueue.classify(result)[0], "Critical risk")
+
+    def test_an_ordinary_report_still_reaches_nobody(self) -> None:
+        result = _result("NM-5", "Loose chequered plate refitted the same morning",
+                         high_energy=False, barrier_failed=False, confidence=0.8,
+                         risk_band="Low")
+        self.assertIsNone(ReviewQueue.classify(result)[0])
+
+
+class TestSampleReports(unittest.TestCase):
+    """The bundled test material must actually exercise what it claims to."""
+
+    FOLDER = "samples"
+
+    def test_every_sample_named_in_the_readme_exists(self) -> None:
+        with open(os.path.join(self.FOLDER, "README.md"), encoding="utf-8") as handle:
+            readme = handle.read()
+        for name in ("near_miss_reports.csv", "shift_log.txt", "permit_observation.pdf",
+                     "scanned_uauc_report.png", "multilingual_report.txt"):
+            self.assertTrue(os.path.isfile(os.path.join(self.FOLDER, name)), name)
+            self.assertIn(name, readme, f"{name} is not documented")
+
+    def test_the_csv_imports_with_its_references(self) -> None:
+        from main import read_csv_reports
+
+        narratives, references = read_csv_reports(
+            os.path.join(self.FOLDER, "near_miss_reports.csv"))
+        self.assertEqual(len(narratives), 18)
+        self.assertEqual(references[0], "NM-2601")
+        self.assertGreaterEqual(sum(1 for text in narratives if len(text) > 180), 13,
+                                "most narratives carry a real amount of detail")
+        self.assertGreaterEqual(sum(1 for text in narratives if len(text) < 70), 2,
+                                "short narratives are deliberate - they test thin evidence")
+
+    def test_the_sample_corpus_exercises_every_offline_trigger(self) -> None:
+        from main import read_csv_reports
+
+        narratives, references = read_csv_reports(
+            os.path.join(self.FOLDER, "near_miss_reports.csv"))
+        pipeline = SIFPipeline(backend="hashing")
+        results = [pipeline.analyze(text, reference=reference)
+                   for text, reference in zip(narratives, references)]
+        triggers = {item.trigger for item in ReviewQueue().build(results)}
+        self.assertEqual(triggers, {"Critical risk", "Thin evidence", "Energy, no barrier"})
+        self.assertGreaterEqual(sum(1 for item in results if item.sif_potential), 4)
+
+    def test_the_scan_has_no_text_layer_so_ocr_has_to_run(self) -> None:
+        with open(os.path.join(self.FOLDER, "scanned_uauc_report.png"), "rb") as handle:
+            header = handle.read(8)
+        self.assertEqual(header, b"\x89PNG\r\n\x1a\n")
+
+    def test_the_multilingual_sample_covers_the_languages_claimed(self) -> None:
+        with open(os.path.join(self.FOLDER, "multilingual_report.txt"),
+                  encoding="utf-8") as handle:
+            text = handle.read()
+        for language in ("HINDI", "MARATHI", "TAMIL", "TELUGU", "KANNADA"):
+            self.assertIn(language, text)
+        self.assertTrue(looks_non_latin(text.split("--- TAMIL")[1][:400]))
+
+
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestReviewBench(unittest.TestCase):
+    """Driving the review page the way a reviewer does."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        import main2
+
+        # A modal dialog in a headless test hangs the whole run, so record the
+        # calls instead of showing them - and let a test assert on them.
+        self.dialogs: List[str] = []
+        self._real_boxes = (main2.QMessageBox.information, main2.QMessageBox.warning)
+        main2.QMessageBox.information = lambda *args, **kw: self.dialogs.append(args[-1])
+        main2.QMessageBox.warning = lambda *args, **kw: self.dialogs.append(args[-1])
+
+        self.folder = tempfile.mkdtemp(prefix="sif-bench-")
+        self.window = main2.MainWindow()
+        # Never touch the operator's real decision log from a test.
+        self.window.decisions = DecisionLog(os.path.join(self.folder, "decisions.json"))
+        self.window.rows = [
+            dict(reference="R-1", raw_text="Cable left ungrounded, no LOTO applied",
+                 sif_potential=True, risk_score=95.0, risk_band="Critical",
+                 iogp_rule="Energy Isolation", activity="maintenance",
+                 location="Pump station", barrier_failure="LOTO", energy_source="electrical",
+                 high_energy=True, barrier_failed=True, confidence=0.9),
+            dict(reference="R-2", raw_text="Vessel entered with no gas test and no ventilation",
+                 sif_potential=True, risk_score=88.0, risk_band="Critical",
+                 iogp_rule="Confined Space", activity="entry", location="ETP",
+                 barrier_failure="gas test", energy_source="toxic", high_energy=True,
+                 barrier_failed=True, confidence=0.8),
+            dict(reference="R-3", raw_text="Observation raised", sif_potential=False,
+                 risk_score=0.0, risk_band="Low", iogp_rule="Unclassified / General HSE",
+                 activity="round", location="site", barrier_failure="none",
+                 energy_source="none", confidence=0.05),
+        ]
+        self.window._refresh()
+
+    def tearDown(self) -> None:
+        import main2
+
+        main2.QMessageBox.information, main2.QMessageBox.warning = self._real_boxes
+        self.window.close()
+
+    def _grow_corpus(self, copies: int = 4) -> None:
+        """Repeat the three fixtures so the corpus is big enough to train on."""
+        base = list(self.window.rows)
+        for index, row in enumerate(base * copies, start=1):
+            self.window.rows.append(
+                dict(row, reference=f"X-{index}", raw_text=f"{row['raw_text']} {index}"))
+        self.window._refresh()
+
+    def test_the_queue_shows_what_is_outstanding(self) -> None:
+        self.assertEqual(self.window.outstanding_reviews, 3)
+        self.assertEqual(self.window.review_view.table.rowCount(), 3)
+        self.assertIn("3", self.window.review_view.progress.text())
+
+    def test_selecting_a_row_shows_the_whole_case(self) -> None:
+        self.window.review_view.select(0)
+        view = self.window.review_view
+        self.assertEqual(view.reference.text(), "R-1")
+        self.assertIn("Energy Isolation", view.fields["rule"]._full_value)
+        self.assertIn("Rules:", view.opinions.text())
+        self.assertTrue(view.buttons["confirmed"].isEnabled())
+
+    def test_a_decision_leaves_the_queue_and_becomes_a_label(self) -> None:
+        view = self.window.review_view
+        view.select(0)
+        view.reviewer.setText("D. Reviewer")
+        view.note.setText("isolation certificate never raised")
+        view._decide("confirmed")
+
+        self.assertEqual(self.window.outstanding_reviews, 2)
+        entry = self.window.decisions.for_result(self.window._result_at(1))
+        self.assertEqual(entry.decision, "confirmed")
+        self.assertEqual(entry.reviewer, "D. Reviewer")
+        self.assertIn("isolation certificate", entry.note)
+        _, labels = self.window.decisions.labels_for(self.window._as_results())
+        self.assertEqual(labels, [1])
+        self.assertEqual(view.note.text(), "", "the note belongs to one report only")
+
+    def test_deciding_never_skips_the_next_report(self) -> None:
+        """The queue rebuild moves the next report up; advancing again would skip it."""
+        view = self.window.review_view
+        view.select(0)
+        seen = [view.reference.text()]
+        for _ in range(2):
+            view._decide("rejected")
+            seen.append(view.reference.text())
+        self.assertEqual(len(set(seen[:3])), 3, f"a report was skipped: {seen}")
+        self.assertEqual(self.window.outstanding_reviews, 1)
+
+    def test_decided_reports_come_back_when_asked_for(self) -> None:
+        view = self.window.review_view
+        view.select(0)
+        view._decide("confirmed")
+        self.assertEqual(view.table.rowCount(), 2)
+        view.show_decided.setChecked(True)
+        self.assertEqual(view.table.rowCount(), 3)
+        self.assertEqual(self.window.outstanding_reviews, 2,
+                         "showing them again does not make them outstanding")
+        statuses = [self.window.queue_rows[index]["status"] for index in range(3)]
+        self.assertIn(DECISION_SHORT["confirmed"], statuses)
+
+    def test_the_trail_keeps_every_entry_including_the_changed_ones(self) -> None:
+        view = self.window.review_view
+        view.select(0)
+        view._decide("confirmed")
+        view.show_decided.setChecked(True)
+        view.select(0)
+        view._decide("rejected")
+        self.assertEqual(view.trail_table.rowCount(), 2)
+        self.assertEqual(self.window.decisions.counts()["decided"], 1)
+
+    def test_undo_puts_the_report_back_in_the_queue(self) -> None:
+        view = self.window.review_view
+        view.select(0)
+        view._decide("confirmed")
+        self.assertEqual(self.window.outstanding_reviews, 2)
+        self.window.undo_decision()
+        self.assertEqual(self.window.outstanding_reviews, 3)
+        self.assertEqual(view.trail_table.rowCount(), 0)
+
+    def test_the_header_counts_outstanding_work_not_decided_work(self) -> None:
+        tile = self.window.dashboard.tile_review
+        self.window.review_view.select(0)
+        self.window.review_view._decide("rejected")
+        self.assertEqual(tile._value.text(), "2")
+        self.assertIn("1 decided", tile._note.text())
+
+    def test_too_small_a_corpus_is_refused_rather_than_trained(self) -> None:
+        started = []
+        self.window._start = lambda worker, message: started.append(message)
+        self.window.train_model()
+        self.assertEqual(started, [], "three reports must not reach a training run")
+        self.assertTrue(any("at least four" in text for text in self.dialogs))
+
+    def test_training_prefers_human_labels_once_there_are_enough(self) -> None:
+        """Below the threshold it trains on pipeline verdicts, and says which."""
+        import main2
+
+        started = []
+        self.window._start = lambda worker, message: started.append((worker, message))
+        self._grow_corpus()
+        self.window.train_model()
+        self.assertIn("pipeline verdict", started[-1][1])
+        self.assertIsNone(started[-1][0]._labels)
+
+        for result in self.window._as_results():
+            self.window.decisions.record(
+                result, "confirmed" if result.sif_potential else "rejected", reviewer="D")
+        self.window.train_model()
+        worker, message = started[-1]
+        self.assertIn("reviewed decision", message)
+        self.assertGreaterEqual(len(worker._labels), main2.MainWindow.MIN_HUMAN_LABELS)
+        self.assertEqual(len(worker._labels), len(worker._results))
+        self.assertEqual(worker._label_source, "human review decisions")
+        self.assertEqual(set(worker._labels), {0, 1})
 
 
 if __name__ == "__main__":

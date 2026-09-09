@@ -195,6 +195,23 @@ usually the most actionable: it names the control to fix.
 | **Critical risk** | Scored in the top band. | Verify before it drives an intervention. |
 | **Thin evidence** | Very little extractable text. | Usually a reporting-quality problem: go back to the reporter. |
 | **Unclassified exposure** | High energy, no rule matched. | Vocabulary the system has not seen — candidate for a new pattern (Rule C2). |
+| **Energy, no barrier** | A high-energy source and a rule matched, but no failed barrier did — so `P(SIF) = energy × barrier` came out at zero. | Confirm the barrier genuinely held, or name the one that failed. A rejection here is a correct engine call; a confirmation means the barrier vocabulary is missing a phrase (Rule C2). |
+
+In build 2 (`app2.py`) this is a working bench rather than a table. Select a row
+and the whole case is on the right: narrative, extracted fields, what each engine
+said, the cues and the decision path. Decide with **1** (confirm SIF potential),
+**2** (not SIF potential) or **3** (unclear — more information needed); the bench
+advances to the next report by itself, so a queue is worked with the keyboard.
+
+* Put your **name** in the reviewer box once — it goes on every record.
+* A **note** is optional but is what makes a decision reusable six months later.
+* **Unclear is not a label.** It records that an expert looked and could not call
+  it, which is a different fact from "not SIF", and training never sees it.
+* Decisions are written to `review_decisions.json` in the configuration directory
+  **as you make them**, so an hour of queue work survives a crash.
+* Changing a decision supersedes the old one without erasing it. The **Decision
+  trail** tab holds every entry and exports to CSV for an auditor.
+* **Undo the last decision** is for the misclick, not for a change of mind.
 
 **Step 5 — act on hotspots.** A cluster of ≥2 reports sharing a location, an
 activity, a rule-at-a-location or a failing barrier is a *system* problem, not an

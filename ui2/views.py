@@ -135,7 +135,10 @@ class DashboardView(QWidget):
                                 f"{float(kpis.get('sif_rate', 0.0)):.1f}% of corpus")
         self.tile_risk.set_value(f"{float(kpis.get('mean_risk', 0.0)):.1f}",
                                  f"{kpis.get('critical', 0)} in the critical band")
-        self.tile_review.set_value(str(kpis.get("needs_review", 0)), "expert validation")
+        reviewed = int(kpis.get("reviewed", 0) or 0)
+        self.tile_review.set_value(
+            str(kpis.get("needs_review", 0)),
+            f"{reviewed} decided by an expert" if reviewed else "expert validation")
         agreement = kpis.get("model_agreement")
         self.tile_engine.set_value(
             "-" if agreement is None else f"{float(agreement):.0f}%",

@@ -52,11 +52,13 @@ from sif.mlops import MLOpsService
 from sif import prefs
 from sif.ocr import LANGUAGE_CHOICES, UNSUPPORTED_LANGUAGES, DocumentExtractor
 from sif.pipeline import PipelineResult
+from sif.review import DECISION_LABELS, DECISION_SHORT, DecisionLog, fingerprint
 from sif.updater import UpdateChecker, UpdateInfo
 from sif.version import describe
 from ui.theme import C, STYLESHEET
-from ui.views import HOTSPOT_COLUMNS, REVIEW_COLUMNS, AnalyticsView, TableView
+from ui.views import HOTSPOT_COLUMNS, AnalyticsView, TableView
 from ui2.components import HeaderBar, Sidebar
+from ui2.review import ReviewView
 from ui2.views import DashboardView, EnginesView, IngestView, ReportView, SettingsView
 from ui2.workflow import WorkflowMap
 
@@ -195,14 +197,19 @@ class TrainingWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, service: MLOpsService, results: Sequence[PipelineResult],
+                 labels: Optional[Sequence[int]] = None, label_source: str = "",
                  parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._service = service
         self._results = list(results)
+        self._labels = list(labels) if labels is not None else None
+        self._label_source = label_source
 
     def run(self) -> None:  # noqa: D102 - documented on the class
         try:
-            self.trained.emit(self._service.train(self._results).to_dict())
+            self.trained.emit(self._service.train(
+                self._results, labels=self._labels,
+                label_source=self._label_source or None).to_dict())
         except Exception as exc:  # noqa: BLE001 - surfaced in the UI
             LOGGER.warning("Training failed: %s", exc)
             self.failed.emit(f"{type(exc).__name__}: {exc}")
@@ -383,6 +390,9 @@ class MainWindow(QMainWindow):
         self.updater = UpdateChecker()
         self.update_worker: Optional[UpdateWorker] = None
         self.rows: List[Dict[str, object]] = []
+        self.decisions = DecisionLog().load()
+        self.queue_rows: List[Dict[str, object]] = []
+        self.outstanding_reviews = 0
         self.documents: List[Dict[str, object]] = []
         self.pending_blocks: List[str] = []
         self.worker: Optional[QThread] = None
@@ -428,11 +438,8 @@ class MainWindow(QMainWindow):
             "Sites, activities, rule-at-location repeats and barrier failures occurring "
             "more than once, ranked by SIF-precursor density.",
             HOTSPOT_COLUMNS)
-        self.review_view = TableView(
-            "Human review queue",
-            "Reports a person must verify: rule, model or LLM disagreement, critical "
-            "risk, thin evidence, or high energy with no rule match.",
-            REVIEW_COLUMNS)
+        self.review_view = ReviewView()
+        self.review_view.set_reviewer(str(prefs.get("reviewer", "") or ""))
         self.analytics_view = AnalyticsView()
         self.engines_view = EnginesView()
         self.settings_view = SettingsView()
@@ -511,6 +518,13 @@ class MainWindow(QMainWindow):
         self.ingest_view.translate_toggled.connect(self.set_translation)
 
         self.report_view.row_selected.connect(self.select_row)
+
+        self.review_view.row_selected.connect(self.select_review_row)
+        self.review_view.decision_made.connect(self.record_decision)
+        self.review_view.undo_requested.connect(self.undo_decision)
+        self.review_view.export_requested.connect(self.export_decisions)
+        self.review_view.reviewer_changed.connect(self.set_reviewer)
+        self.review_view.show_decided.stateChanged.connect(lambda _: self._refresh())
 
         self.engines_view.encoder_changed.connect(self.change_encoder)
         self.engines_view.train_requested.connect(self.train_model)
@@ -598,10 +612,18 @@ class MainWindow(QMainWindow):
             else "no repeats yet - needs at least two related reports",
             ready if hotspots else waiting)
 
-        queued = self.review_view.table.rowCount()
+        counts = self.decisions.counts()
+        outstanding = self.outstanding_reviews
+        if outstanding:
+            review_text = (f"{outstanding} report(s) awaiting an expert  ·  "
+                           f"{counts['decided']} decided")
+        elif counts["decided"]:
+            review_text = (f"queue clear  ·  {counts['decided']} decided, "
+                           f"{counts['labels']} usable as labels")
+        else:
+            review_text = "queue empty"
         self.workflow.set_status(
-            "review", f"{queued} report(s) awaiting an expert" if queued
-            else "queue empty", waiting if queued else ready)
+            "review", review_text, waiting if outstanding else ready)
 
         status = self.mlops.status()["model"]
         self.workflow.set_status(
@@ -769,8 +791,19 @@ class MainWindow(QMainWindow):
         self.engines_view.set_llm_status("Checking the local LLM host")
         self._start(ProbeWorker("Ollama", probe, parent=self), "Checking Ollama")
 
+    #: Below this many reviewed labels, human decisions are too few to train on
+    #: alone and the pipeline's own verdicts are used instead.
+    MIN_HUMAN_LABELS = 8
+
     def train_model(self) -> None:
-        """Train the learned model on the analysed corpus."""
+        """Train the learned model, on reviewed decisions when there are enough.
+
+        This is where the review queue pays for itself. Given enough decided
+        reports the model learns from what experts concluded; short of that it
+        falls back to the pipeline's own verdicts, which teaches it to reproduce
+        the rules and nothing more. Either way the operator is told which it was,
+        because the two are worth very different amounts.
+        """
         results = self._as_results()
         if len(results) < 4:
             QMessageBox.information(
@@ -778,10 +811,24 @@ class MainWindow(QMainWindow):
                 "Analyse at least four reports before training - the model needs both "
                 "SIF-potential and non-SIF examples.")
             return
-        worker = TrainingWorker(self.mlops, results, parent=self)
+
+        reviewed, labels = self.decisions.labels_for(results)
+        if len(labels) >= self.MIN_HUMAN_LABELS and len(set(labels)) > 1:
+            worker = TrainingWorker(self.mlops, reviewed, labels,
+                                    "human review decisions", parent=self)
+            note = f"on {len(labels)} reviewed decision(s)"
+        else:
+            shortfall = (f"only {len(labels)} reviewed label(s); "
+                         f"{self.MIN_HUMAN_LABELS} are needed"
+                         if len(set(labels)) > 1 or not labels
+                         else f"{len(labels)} reviewed label(s), all the same verdict")
+            LOGGER.info("Training on pipeline verdicts - %s", shortfall)
+            worker = TrainingWorker(self.mlops, results,
+                                    label_source="weak (pipeline verdicts)", parent=self)
+            note = f"on {len(results)} pipeline verdict(s) - {shortfall}"
         worker.trained.connect(self.on_trained)
         worker.failed.connect(self.on_failed)
-        self._start(worker, "Training the model")
+        self._start(worker, f"Training the model {note}")
 
     def change_log_level(self, level: str) -> None:
         if level in LOG_LEVELS:
@@ -961,9 +1008,15 @@ class MainWindow(QMainWindow):
         """Recompute aggregates and repaint every page."""
         results = self._as_results()
         intelligence = self.pipeline.aggregate(results)
+        outstanding = self._refresh_review(results, intelligence)
+
         kpis = dict(intelligence.kpis)
         kpis["model_agreement"] = self._model_agreement(results)
         kpis["language"] = self.language
+        # The header counts what is still owed to a person, not what was ever
+        # queued: a decided report is finished work and stops being a number.
+        kpis["needs_review"] = outstanding
+        kpis["reviewed"] = self.decisions.counts()["decided"]
 
         rules, energies, barriers = self._chart_data(results)
         activities = self._activity_data(results)
@@ -974,11 +1027,127 @@ class MainWindow(QMainWindow):
         self.analytics_view.update_model(self.mlops.status()["model"],
                                          report.importances if report else [])
         self.hotspot_view.set_rows([spot.to_dict() for spot in intelligence.hotspots])
-        review = [item.to_dict() for item in intelligence.review_queue]
-        self.review_view.set_rows(review)
-        self.sidebar.set_badge("review", len(review))
         self._refresh_workflow()
         return intelligence
+
+    # -- human review ------------------------------------------------------
+
+    def _result_at(self, position: int) -> Optional[PipelineResult]:
+        """The analysed result at a 1-based queue position, or None."""
+        if not 1 <= position <= len(self.rows):
+            return None
+        fields = PipelineResult.__dataclass_fields__
+        row = self.rows[position - 1]
+        return PipelineResult(**{key: value for key, value in row.items()
+                                 if key in fields})
+
+    def _refresh_review(self, results: Sequence[PipelineResult], intelligence) -> int:
+        """Repaint the review page; returns how many reports still need a person.
+
+        A decided report leaves the queue but is never deleted: ticking "show
+        reports already decided" brings it back, so a call can be checked or
+        changed, and the trail tab always holds every entry.
+        """
+        standing = self.decisions.current()
+        include_decided = self.review_view.show_decided.isChecked()
+        rows: List[Dict[str, object]] = []
+        outstanding = 0
+        for item in intelligence.review_queue:
+            result = results[item.index - 1] if item.index <= len(results) else None
+            entry = standing.get(fingerprint(result)) if result is not None else None
+            if entry is None:
+                outstanding += 1
+            elif not include_decided:
+                continue
+            payload = item.to_dict()
+            payload["decided"] = entry is not None
+            payload["status"] = ("awaiting" if entry is None
+                                 else DECISION_SHORT.get(entry.decision, entry.decision))
+            rows.append(payload)
+
+        self.queue_rows = rows
+        self.outstanding_reviews = outstanding
+        counts = self.decisions.counts()
+        self.review_view.set_queue(rows, outstanding, counts["decided"])
+        self.review_view.set_trail(self.decisions.rows())
+        self.sidebar.set_badge("review", outstanding)
+        return outstanding
+
+    def select_review_row(self, row: int) -> None:
+        """Show the case for a queue row."""
+        if not 0 <= row < len(self.queue_rows):
+            self.review_view.set_case(None)
+            return
+        payload = self.queue_rows[row]
+        position = int(payload.get("index", 0) or 0)
+        result = self._result_at(position)
+        if result is None:
+            self.review_view.set_case(None)
+            return
+        entry = self.decisions.current().get(fingerprint(result))
+        decision = None
+        if entry is not None:
+            decision = dict(entry.to_dict())
+            decision["decision_label"] = DECISION_LABELS.get(entry.decision, entry.decision)
+        self.review_view.set_case(self.rows[position - 1], decision)
+
+    def record_decision(self, decision: str, note: str) -> None:
+        """The reviewer called the selected report."""
+        row = self.review_view.current_row()
+        if not 0 <= row < len(self.queue_rows):
+            return
+        position = int(self.queue_rows[row].get("index", 0) or 0)
+        result = self._result_at(position)
+        if result is None:
+            return
+        reviewer = self.review_view.reviewer.text().strip()
+        entry = self.decisions.record(result, decision, reviewer=reviewer, note=note)
+        if not self.decisions.saved:
+            QMessageBox.warning(
+                self, APP_NAME,
+                "The decision was recorded in this session but could not be written "
+                f"to:\n{self.decisions.path}\n\nIt will be lost when the console "
+                "closes. Check that the folder is writable.")
+        self._refresh()
+        self.review_view.advance()
+        self._set_status(
+            f"{DECISION_LABELS[entry.decision]} recorded for "
+            f"{entry.reference or 'the selected report'}"
+            + ("  ·  overturns the engine" if entry.overturns_engine else "")
+            + f"  ·  {self.outstanding_reviews} left to review")
+
+    def undo_decision(self) -> None:
+        """Withdraw the most recent decision - for the misclick."""
+        entry = self.decisions.undo()
+        if entry is None:
+            self._set_status("There is no decision to undo.")
+            return
+        self._refresh()
+        self._set_status(
+            f"Withdrew the {DECISION_LABELS[entry.decision].lower()} decision on "
+            f"{entry.reference or 'a report'}")
+
+    def export_decisions(self) -> None:
+        """Write the decision trail out for an auditor."""
+        if not self.decisions.entries:
+            QMessageBox.information(self, APP_NAME,
+                                    "There are no review decisions to export yet.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export review decisions", "review_decisions.csv", "CSV files (*.csv)")
+        if not path:
+            return
+        try:
+            self.decisions.export_csv(path)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"Could not write {path}:\n{exc}")
+            return
+        self._set_status(f"Exported {len(self.decisions.entries)} decision(s) to {path}")
+
+    def set_reviewer(self, name: str) -> None:
+        """Remember who is reviewing, so the name is not retyped every session."""
+        prefs.set_value("reviewer", name)
+        LOGGER.info("Reviewer set to %s", name or "unnamed")
 
     @staticmethod
     def _model_agreement(results: Sequence[PipelineResult]) -> Optional[float]:
@@ -1062,11 +1231,17 @@ class MainWindow(QMainWindow):
     # -- Qt lifecycle ------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Stop timers and any running worker before closing."""
+        """Stop timers and every running worker before closing.
+
+        The update check runs a few seconds after start-up, so closing the window
+        early used to leave its thread running and Qt would complain. Every worker
+        this window owns is waited for, not just the analysis one.
+        """
         self.log_timer.stop()
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.worker.wait(3000)
+        for worker in (self.worker, self.update_worker):
+            if worker is not None and worker.isRunning():
+                worker.requestInterruption()
+                worker.wait(3000)
         LOGGER.info("%s (build 2) closing", APP_NAME)
         super().closeEvent(event)
 
