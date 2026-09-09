@@ -136,6 +136,98 @@ class TestOCRLanguages(unittest.TestCase):
         self.assertIn("Kannada", extractor.status())
 
 
+class TestOCRModelCache(unittest.TestCase):
+    """The models are a one-time download per machine - and must be seen as one."""
+
+    def setUp(self) -> None:
+        from sif import ocr, prefs
+
+        self.ocr, self.prefs = ocr, prefs
+        self.cache = tempfile.mkdtemp(prefix="sif-paddlex-")
+        self._previous = os.environ.get("PADDLE_PDX_CACHE_HOME")
+        os.environ["PADDLE_PDX_CACHE_HOME"] = self.cache
+        # Keep the operator's real preferences out of the tests.
+        self.stored: dict = {}
+        self._real = (prefs.get, prefs.set_value)
+        prefs.get = lambda key, default=None: self.stored.get(key, default)
+        prefs.set_value = lambda key, value: self.stored.__setitem__(key, value)
+
+    def tearDown(self) -> None:
+        self.prefs.get, self.prefs.set_value = self._real
+        if self._previous is None:
+            os.environ.pop("PADDLE_PDX_CACHE_HOME", None)
+        else:
+            os.environ["PADDLE_PDX_CACHE_HOME"] = self._previous
+
+    def _download(self, *names: str) -> None:
+        """Pretend PaddleOCR has fetched these models."""
+        for name in names:
+            folder = os.path.join(self.cache, "official_models", name)
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "inference.pdmodel"), "w") as handle:
+                handle.write("weights")
+
+    def test_the_cache_directory_follows_paddle_s_own_variable(self) -> None:
+        self.assertEqual(self.ocr.cache_directory(), self.cache)
+
+    def test_an_empty_machine_reports_nothing_cached(self) -> None:
+        self.assertEqual(self.ocr.cached_models(), [])
+        self.assertFalse(self.ocr.models_present())
+
+    def test_a_half_finished_download_does_not_count_as_present(self) -> None:
+        os.makedirs(os.path.join(self.cache, "official_models", "PP-OCRv5_det"))
+        self.assertEqual(self.ocr.cached_models(), [],
+                         "an empty folder is an interrupted download, not a model")
+        self.assertFalse(self.ocr.models_present())
+
+    def test_detection_alone_is_not_enough_to_read_a_page(self) -> None:
+        self._download("PP-OCRv5_server_det")
+        self.assertFalse(self.ocr.models_present())
+        self._download("latin_PP-OCRv5_mobile_rec")
+        self.assertTrue(self.ocr.models_present())
+
+    def test_a_machine_that_has_the_models_is_told_so_every_start_up(self) -> None:
+        extractor = self.ocr.DocumentExtractor(language="English")
+        self.assertIn("download", extractor.status().lower())
+        self._download("PP-OCRv5_server_det", "latin_PP-OCRv5_mobile_rec")
+        self.assertIn("already cached", extractor.status())
+        self.ocr.remember_verified("en")
+        status = self.ocr.DocumentExtractor(language="English").status()
+        self.assertIn("No download needed", status)
+        self.assertIn(self.cache, status)
+
+    def test_verification_is_remembered_per_language(self) -> None:
+        self.ocr.remember_verified("ta")
+        self.assertIn("ta", self.ocr.verified_languages())
+        self.assertNotIn("hi", self.ocr.verified_languages())
+
+    def test_switching_language_does_not_throw_the_engine_away(self) -> None:
+        """Rebuilding the extractor is how language switching works - it must be free."""
+        english = self.ocr.DocumentExtractor(language="English")
+        tamil = self.ocr.DocumentExtractor(language="Tamil / \u0ba4\u0bae\u0bbf\u0bb4\u0bcd")
+        again = self.ocr.DocumentExtractor(language="English")
+        self.assertIs(english._ocr, again._ocr)
+        self.assertIsNot(english._ocr, tamil._ocr)
+
+    def test_a_failure_is_retried_when_the_operator_asks_again(self) -> None:
+        backend = self.ocr.PaddleOCRBackend.shared("en")
+        backend.failure = "the network was down"
+        self.assertIn("not usable", self.ocr.DocumentExtractor(language="English").status())
+        backend.reset()
+        self.assertIsNone(backend.failure)
+
+    def test_prefetch_reports_every_language_and_never_raises(self) -> None:
+        outcomes = self.ocr.prefetch(["English", "Tamil / \u0ba4\u0bae\u0bbf\u0bb4\u0bcd"])
+        self.assertEqual([code for code, _ok, _message in outcomes], ["en", "ta"])
+        for _code, ok, message in outcomes:
+            self.assertIsInstance(ok, bool)
+            self.assertTrue(message)
+
+    def test_the_listing_command_runs_without_touching_the_network(self) -> None:
+        self._download("PP-OCRv5_server_det", "latin_PP-OCRv5_mobile_rec")
+        self.assertEqual(self.ocr._main(["--list"]), 0)
+
+
 class TestOllamaEngine(unittest.TestCase):
     """The local LLM client, against a stand-in server."""
 

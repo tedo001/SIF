@@ -64,7 +64,7 @@ investigator and not a system of record.
 | Python 3.10+ | 3.11 is what the suite is verified against. |
 | ~4 GB free disk | Mostly torch; the offline-only install is ~150 MB. |
 | A desktop session | It is a Qt application. Headless servers need `QT_QPA_PLATFORM=offscreen` and can only run the CLI and tests. |
-| Internet, **once** | For the sentence-transformer (~90 MB) and PaddleOCR models (~10 MB). Air-gapped sites: Section 7.2. |
+| Internet, **once** | For the sentence-transformer (~90 MB) and PaddleOCR models (~10 MB). Both are cached on the machine and never fetched again; run `python -m sif.ocr en` to do the OCR half deliberately. Air-gapped sites: Section 7.2. |
 
 ---
 
@@ -370,10 +370,17 @@ export SIF_ENCODER_MODEL=/opt/sif/minilm-local
 export SIF_ENCODER=transformer
 ```
 
-For PaddleOCR, run one OCR job on the connected machine and copy the populated
-`~/.paddlex` cache to the target machine's home directory. Verify with **Check OCR
-availability** — it loads the engine for real, so a green result means the plant
-machine genuinely can OCR.
+For PaddleOCR, fetch the models once on a connected machine and copy the cache:
+
+```bash
+python -m sif.ocr en hi ta          # download and verify, once
+python -m sif.ocr --list            # what this machine already has
+```
+
+Then copy the whole cache directory (`~/.paddlex`, or wherever
+`PADDLE_PDX_CACHE_HOME` points) to the target machine's home directory. Verify
+with **Download / verify OCR models** — it loads the engine for real, so a green
+result means the plant machine genuinely can OCR.
 
 *Verified caveat:* in the build environment used to develop this, the model hosts
 were unreachable, so the transformer and OCR paths were exercised end-to-end
@@ -481,6 +488,7 @@ Run before first use, after any change, and after any environment move.
 | "Training refused: needs both classes" | Every analysed report has the same outcome | Analyse a wider sample; a model cannot learn one class |
 | Perfect metrics | Weak labels, or too few reports | Expected in Phase 1 — see Section 6.4 |
 | OCR unavailable | `paddlepaddle` missing, or models unreachable | `pip install paddleocr paddlepaddle`; Section 7.2 for offline |
+| "Models download on first use" on every start-up | The cache is empty, or `PADDLE_PDX_CACHE_HOME` points somewhere new each run | `python -m sif.ocr --list` shows the directory and what is in it. Once the models are there the console says "No download needed" and stops asking |
 | Image import fails, PDFs fine | Image needs OCR; PDF had a text layer | Same fix; the text layer never needed OCR |
 | MLflow "file store maintenance mode" | A `file:` tracking URI on MLflow 3 | Use `sqlite:///mlflow.db` (the default) |
 | Window cramped on a small screen | — | Pages scroll; use the scroll controls or maximise |

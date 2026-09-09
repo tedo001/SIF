@@ -37,8 +37,9 @@ STAGES: Tuple[Tuple[str, str, str, str], ...] = (
      "Add documents"),
     ("ocr", "2. Read the document",
      "PDF text layer first; PaddleOCR for scans, in English, Hindi, Marathi, "
-     "Tamil, Telugu, Kannada and Urdu.",
-     "Check OCR"),
+     "Tamil, Telugu, Kannada and Urdu. The models download once per machine and "
+     "are then kept on disk.",
+     "Download / verify models"),
     ("translate", "3. Translate",
      "A local Ollama model renders a non-English report into English so the "
      "analysers can read it. Skipped for English.",

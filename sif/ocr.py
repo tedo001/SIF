@@ -30,11 +30,14 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
 __all__ = ["ExtractedDocument", "DocumentExtractor", "OCRUnavailable",
-           "TEXT_SUFFIXES", "IMAGE_SUFFIXES", "LANGUAGES", "LANGUAGE_CHOICES",
-           "UNSUPPORTED_LANGUAGES", "resolve_language"]
+           "PaddleOCRBackend", "TEXT_SUFFIXES", "IMAGE_SUFFIXES", "LANGUAGES",
+           "LANGUAGE_CHOICES", "UNSUPPORTED_LANGUAGES", "resolve_language",
+           "cache_directory", "cached_models", "models_present", "prefetch",
+           "verified_languages", "remember_verified"]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -110,6 +113,95 @@ class OCRUnavailable(RuntimeError):
     """Raised when a document needs OCR and no OCR backend is installed."""
 
 
+# ---------------------------------------------------------------------------
+# The model cache - "download once, then never again"
+# ---------------------------------------------------------------------------
+#
+# PaddleOCR downloads its detection, orientation and recognition models the first
+# time an engine is constructed, and keeps them in a cache directory on the
+# machine. They are not reinstalled per run, per language or per session - but
+# the console used to have no way of knowing they were there, so every start-up
+# told the operator that models "download on first use" and asked them to check
+# again. These helpers look at the disk instead, so a machine that has already
+# fetched them says so and stays saying so.
+
+
+def cache_directory() -> str:
+    """The directory PaddleOCR keeps downloaded models in, on this machine.
+
+    Mirrors PaddleX's own resolution (``PADDLE_PDX_CACHE_HOME``, else
+    ``~/.paddlex``) rather than importing it, because importing paddlex costs
+    the very seconds this check exists to save.
+    """
+    return os.environ.get("PADDLE_PDX_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".paddlex")
+
+
+def _model_directories() -> List[str]:
+    """Every place a downloaded model may sit, newest layout first."""
+    return [
+        os.path.join(cache_directory(), "official_models"),   # PaddleX 3.x
+        os.path.join(os.path.expanduser("~"), ".paddleocr", "whl"),  # PaddleOCR 2.x
+    ]
+
+
+def cached_models() -> List[str]:
+    """Names of the OCR models already downloaded to this machine."""
+    found: List[str] = []
+    for directory in _model_directories():
+        if not os.path.isdir(directory):
+            continue
+        for entry in sorted(os.listdir(directory)):
+            path = os.path.join(directory, entry)
+            # A model is a directory with weights in it; a half-finished download
+            # leaves an empty folder, which must not count as present.
+            if not os.path.isdir(path):
+                continue
+            with os.scandir(path) as contents:
+                if any(True for _ in contents):
+                    found.append(entry)
+    return found
+
+
+def verified_languages() -> Dict[str, str]:
+    """Language codes this machine has actually run OCR with, and when.
+
+    Written by :meth:`DocumentExtractor.probe` after a load that really worked.
+    It is a convenience for the status line, never a substitute for the disk
+    check: a cleared cache makes the models absent whatever this file says.
+    """
+    from . import prefs
+
+    stored = prefs.get("ocr_verified", {})
+    return {str(key): str(value) for key, value in stored.items()} \
+        if isinstance(stored, dict) else {}
+
+
+def remember_verified(language: str) -> None:
+    """Record that OCR loaded successfully for ``language`` on this machine."""
+    from . import prefs
+
+    stored = verified_languages()
+    stored[language] = datetime.now().isoformat(timespec="seconds")
+    prefs.set_value("ocr_verified", stored)
+    LOGGER.info("Recorded OCR as verified for %r (models in %s)",
+                language, cache_directory())
+
+
+def models_present() -> bool:
+    """True when a usable set of models is already on this machine.
+
+    Usable means both halves of the pipeline: something that finds text and
+    something that reads it. Model naming changes between PaddleOCR versions, so
+    this matches on the role in the name rather than on an exact list, and never
+    claims readiness from a single downloaded file.
+    """
+    names = [name.lower() for name in cached_models()]
+    detection = any("det" in name for name in names)
+    recognition = any("rec" in name for name in names)
+    return bool(detection and recognition)
+
+
 @dataclass
 class ExtractedDocument:
     """Text recovered from one file, with the provenance of the extraction."""
@@ -145,6 +237,13 @@ class PaddleOCRBackend:
     seconds - work that belongs on a worker thread, never in ``__init__``.
     """
 
+    #: One backend per (language, orientation) for the life of the process. The
+    #: engine costs seconds to build, and the extractor is rebuilt whenever the
+    #: operator changes language - without this, switching Tamil to English and
+    #: back would construct three engines and load the models three times.
+    _shared: Dict[tuple, "PaddleOCRBackend"] = {}
+    _shared_lock = threading.Lock()
+
     def __init__(self, language: str = "en", use_angle_cls: bool = True) -> None:
         self.language = language
         self.use_angle_cls = use_angle_cls
@@ -153,6 +252,26 @@ class PaddleOCRBackend:
         #: Set once a load has failed, so a batch does not retry a download that
         #: cannot succeed - and so the Settings tab can show the real reason.
         self.failure: Optional[str] = None
+
+    @classmethod
+    def shared(cls, language: str = "en", use_angle_cls: bool = True) -> "PaddleOCRBackend":
+        """The backend for this language, reused for the life of the process."""
+        key = (language, bool(use_angle_cls))
+        with cls._shared_lock:
+            backend = cls._shared.get(key)
+            if backend is None:
+                backend = cls(language=language, use_angle_cls=use_angle_cls)
+                cls._shared[key] = backend
+            return backend
+
+    def reset(self) -> None:
+        """Forget a previous failure so the next load genuinely retries.
+
+        A download that failed because the machine was offline must not be
+        remembered as a permanent verdict once it is back on the network.
+        """
+        with self._lock:
+            self.failure = None
 
     @property
     def loaded(self) -> bool:
@@ -280,7 +399,7 @@ class DocumentExtractor:
         #: The friendly name as chosen, and the code actually handed to PaddleOCR.
         self.language_name = language
         self.language = resolve_language(language)
-        self._ocr = PaddleOCRBackend(language=self.language) if enable_ocr else None
+        self._ocr = PaddleOCRBackend.shared(self.language) if enable_ocr else None
 
     # -- capability ---------------------------------------------------------
 
@@ -289,7 +408,13 @@ class DocumentExtractor:
         return bool(self.enable_ocr and PaddleOCRBackend.installed())
 
     def status(self) -> str:
-        """One line describing the ingestion capability, for the Settings tab."""
+        """One line describing the ingestion capability, for the Settings tab.
+
+        The models are downloaded once per machine and kept on disk, so this
+        looks at the disk rather than at whether an engine happens to be loaded
+        in this session. A machine that has already fetched them is told so at
+        every start-up, instead of being asked to check again forever.
+        """
         if not self.enable_ocr:
             return "OCR disabled - PDFs read through their text layer only"
         if not PaddleOCRBackend.installed():
@@ -301,8 +426,16 @@ class DocumentExtractor:
         label = f"{self.language_name} [{self.language}, {script} model]"
         if self._ocr is not None and self._ocr.loaded:
             return f"PaddleOCR ready - reading {label}"
-        return (f"PaddleOCR installed for {label}; models download on first use - "
-                "run 'Check OCR availability' to confirm this machine can fetch them")
+        verified = verified_languages().get(self.language)
+        if verified:
+            return (f"PaddleOCR ready for {label} - models are on this machine "
+                    f"({cache_directory()}), verified {verified[:10]}. No download needed.")
+        if models_present():
+            return (f"PaddleOCR installed for {label} - models already cached in "
+                    f"{cache_directory()}; the {script} recogniser downloads once if it "
+                    "is not among them")
+        return (f"PaddleOCR installed for {label}; the models download once per machine "
+                "on first use - run 'Check OCR availability' to fetch them now")
 
     # -- extraction ---------------------------------------------------------
 
@@ -318,11 +451,16 @@ class DocumentExtractor:
         if not PaddleOCRBackend.installed():
             return False, ("PaddleOCR runtime not installed "
                            "(pip install paddleocr paddlepaddle)")
+        # A previous failure was probably a network that has since come back;
+        # pressing the button must mean "try again", not "repeat the verdict".
+        self._ocr.reset()
         try:
             self._ocr.load()
         except Exception as exc:  # noqa: BLE001 - report, never raise into the UI
             return False, str(exc)
-        return True, "PaddleOCR ready - scanned PDFs and images can be read"
+        remember_verified(self.language)
+        return True, (f"PaddleOCR ready - models are on this machine "
+                      f"({cache_directory()}) and will not download again")
 
     def extract(self, path: str) -> ExtractedDocument:
         """Read one file and return its text with the backend that produced it."""
@@ -433,3 +571,73 @@ class DocumentExtractor:
                     os.path.basename(path), len(text), confidence)
         return ExtractedDocument(path=path, text=text, backend="paddleocr", pages=1,
                                  confidence=confidence)
+
+
+# ---------------------------------------------------------------------------
+# One-time setup
+# ---------------------------------------------------------------------------
+
+def prefetch(languages: Sequence[str] = ("en",)) -> List[Tuple[str, bool, str]]:
+    """Download and verify the OCR models for ``languages``, once.
+
+    This is the deliberate version of what otherwise happens by accident the
+    first time somebody opens a scan: it fetches the models, proves they load,
+    and records each language as verified, so from then on the console reports
+    OCR as ready without touching the network again.
+
+    For a plant machine with no route to the internet, run this on a connected
+    machine and copy the whole cache directory (:func:`cache_directory`) across;
+    the console reads what it finds there.
+
+    Returns one ``(language, ok, message)`` per requested language, and never
+    raises: a language that cannot be fetched is reported, and the rest continue.
+    """
+    outcomes: List[Tuple[str, bool, str]] = []
+    for name in languages:
+        code = resolve_language(name)
+        extractor = DocumentExtractor(language=name)
+        ok, message = extractor.probe()
+        outcomes.append((code, ok, message))
+        LOGGER.info("Prefetch %s: %s", code, "ready" if ok else message)
+    return outcomes
+
+
+def _main(argv: Optional[Sequence[str]] = None) -> int:
+    """``python -m sif.ocr [--languages en hi ta]`` - fetch the models once."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m sif.ocr",
+        description="Download the PaddleOCR models this machine needs, once.")
+    parser.add_argument("languages", nargs="*", default=["en"],
+                        help="languages to fetch (names, codes or aliases); default: en")
+    parser.add_argument("--list", action="store_true",
+                        help="show what is already cached and exit")
+    arguments = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    print(f"Model cache: {cache_directory()}")
+    cached = cached_models()
+    print(f"Already downloaded: {', '.join(cached) if cached else 'nothing yet'}")
+    verified = verified_languages()
+    if verified:
+        print("Verified languages: "
+              + ", ".join(f"{code} ({when[:10]})" for code, when in sorted(verified.items())))
+    if arguments.list:
+        return 0
+    if not PaddleOCRBackend.installed():
+        print("PaddleOCR is not installed. Run: pip install paddleocr paddlepaddle")
+        return 2
+
+    failures = 0
+    for code, ok, message in prefetch(arguments.languages):
+        print(f"  {code}: {'ready' if ok else 'FAILED'} - {message}")
+        failures += 0 if ok else 1
+    print("Done. These models stay on this machine; the console will not download "
+          "them again." if not failures else
+          f"{failures} language(s) could not be fetched - see the messages above.")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":  # pragma: no cover - command-line entry point
+    raise SystemExit(_main())

@@ -463,7 +463,12 @@ class EnginesView(QWidget):
         self.encoder_box.currentIndexChanged.connect(
             lambda: self.encoder_changed.emit(self.encoder_box.currentData()))
 
-        ocr_button = QPushButton("Check OCR availability")
+        # The models are a one-time download per machine, so the button says so:
+        # an operator who reads "check" every session assumes it is re-installing.
+        ocr_button = QPushButton("Download / verify OCR models (once)")
+        ocr_button.setToolTip(
+            "Fetches the PaddleOCR models if this machine does not have them, then "
+            "proves they load. They are kept on disk and are not downloaded again.")
         ocr_button.clicked.connect(self.ocr_check_requested.emit)
 
         grid.addWidget(encoder_label, 0, 0)

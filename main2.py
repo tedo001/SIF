@@ -50,7 +50,8 @@ from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
                                log_file_path, set_level)
 from sif.mlops import MLOpsService
 from sif import prefs
-from sif.ocr import LANGUAGE_CHOICES, UNSUPPORTED_LANGUAGES, DocumentExtractor
+from sif.ocr import (LANGUAGE_CHOICES, UNSUPPORTED_LANGUAGES, DocumentExtractor,
+                     cache_directory, models_present)
 from sif.pipeline import PipelineResult
 from sif.review import DECISION_LABELS, DECISION_SHORT, DecisionLog, fingerprint
 from sif.updater import UpdateChecker, UpdateInfo
@@ -779,9 +780,20 @@ class MainWindow(QMainWindow):
         self._set_status(f"Encoder set to '{backend}'.")
 
     def check_ocr(self) -> None:
-        """Probe the OCR engine for real."""
-        self.ingest_view.set_ocr_status("Checking OCR - loading models, this may download")
-        self._start(ProbeWorker("OCR", self.extractor.probe, parent=self), "Checking OCR")
+        """Fetch the OCR models if this machine lacks them, then prove they load.
+
+        The models are a one-time download per machine, kept on disk afterwards,
+        so this says which of the two is happening rather than making an operator
+        wonder whether it is reinstalling on every run.
+        """
+        first_time = not models_present()
+        LOGGER.info("OCR model cache: %s (%s)", cache_directory(),
+                    "empty - will download" if first_time else "already populated")
+        message = ("Downloading the OCR models - this happens once on this machine"
+                   if first_time else "Loading the OCR models already on this machine")
+        self.ingest_view.set_ocr_status(message)
+        self.engines_view.set_ocr_status(message)
+        self._start(ProbeWorker("OCR", self.extractor.probe, parent=self), message)
 
     def check_llm(self) -> None:
         """Probe the Ollama host."""

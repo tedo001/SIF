@@ -74,8 +74,12 @@ console runs on the rule and semantic paths and the Settings tab says so; withou
   metrics, feature importances and the model artifact to MLflow, saves the
   booster to `models/`, and attaches it to the pipeline as a third opinion.
 * **PaddleOCR** — enable/disable OCR, pick a language, and *actually load* the
-  engine with "Check OCR availability" (it reports the real outcome, including a
-  failed model download, rather than guessing from the import).
+  engine with "Download / verify OCR models" (it reports the real outcome,
+  including a failed model download, rather than guessing from the import). The
+  models are fetched **once per machine** and kept in `~/.paddlex`; the console
+  reads that directory, so a machine that already has them is told so at every
+  start-up rather than asked to check again. `python -m sif.ocr en hi ta` does
+  the download deliberately, and `--list` shows what is already there.
 
 ## Architecture
 
@@ -199,7 +203,7 @@ git tag -a v2.1.0 -m "..." && git push origin v2.1.0
 | File | Responsibility |
 | --- | --- |
 | `sif/pipeline.py` | `SIFPipeline` — orchestration, `PipelineResult`, corpus `Intelligence`. |
-| `sif/ocr.py` | `DocumentExtractor` — plain text, PDF text layer, PaddleOCR for scans; per-line OCR confidence. |
+| `sif/ocr.py` | `DocumentExtractor` — plain text, PDF text layer, PaddleOCR for scans; per-line OCR confidence. Also the model cache: one engine per language for the life of the process, a disk check so a downloaded model is never re-announced as pending, and `python -m sif.ocr` to fetch them once. |
 | `sif/mlops.py` | Features, `SIFModel` (XGBoost), `MLflowTracker`, `MLOpsService`. |
 | `sif/logging_setup.py` | Rotating file + in-memory ring buffer behind the Settings log view. |
 | `ui/` | `theme` (palette, style sheet, scroll-control assets), `charts` (painted bar/donut), `components`, `views`. |
