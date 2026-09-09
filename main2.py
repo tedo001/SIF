@@ -391,6 +391,8 @@ class MainWindow(QMainWindow):
         self.updater = UpdateChecker()
         self.update_worker: Optional[UpdateWorker] = None
         self.rows: List[Dict[str, object]] = []
+        #: Set in closeEvent, so deferred work started by a timer can stand down.
+        self._closing = False
         self.decisions = DecisionLog().load()
         self.queue_rows: List[Dict[str, object]] = []
         self.outstanding_reviews = 0
@@ -868,6 +870,11 @@ class MainWindow(QMainWindow):
         to date" is worth saying; the start-up check stays silent unless there is
         something to offer.
         """
+        if self._closing:
+            # The start-up check is scheduled four seconds out; a window closed
+            # before then must not start a thread nobody is left to wait for.
+            LOGGER.debug("Skipping the update check - the window is closing")
+            return
         if self.update_worker is not None and self.update_worker.isRunning():
             return
         self._interactive_update = interactive
@@ -1228,14 +1235,33 @@ class MainWindow(QMainWindow):
              for entry in self.ring.entries(level, limit=400)])
 
     def _apply_filter(self, text: str) -> None:
-        """Filter the incident matrix from the header search box."""
+        """Filter the result tables from the header search box.
+
+        The box says "reports, sites, activities", so it searches the reports and
+        the hotspots - typing a site name while looking at the hotspot page used
+        to do nothing at all. The review queue is deliberately left alone: it is a
+        work list, and hiding rows from it would hide work.
+        """
         needle = (text or "").strip().lower()
-        table = self.report_view.table
+        matched = self._filter_table(self.report_view.table, needle)
+        self._filter_table(self.hotspot_view.table, needle)
+        if needle:
+            self._set_status(f"{matched} of {len(self.rows)} report(s) match {text.strip()!r}")
+        elif self.rows:
+            self._set_status(f"Showing all {len(self.rows)} report(s)")
+
+    @staticmethod
+    def _filter_table(table, needle: str) -> int:
+        """Hide the rows that do not contain ``needle``; returns how many remain."""
+        visible = 0
         for row in range(table.rowCount()):
             haystack = " ".join(
                 table.item(row, column).text().lower()
                 for column in range(table.columnCount()) if table.item(row, column))
-            table.setRowHidden(row, bool(needle) and needle not in haystack)
+            hidden = bool(needle) and needle not in haystack
+            table.setRowHidden(row, hidden)
+            visible += 0 if hidden else 1
+        return visible
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
@@ -1249,6 +1275,7 @@ class MainWindow(QMainWindow):
         early used to leave its thread running and Qt would complain. Every worker
         this window owns is waited for, not just the analysis one.
         """
+        self._closing = True
         self.log_timer.stop()
         for worker in (self.worker, self.update_worker):
             if worker is not None and worker.isRunning():

@@ -217,8 +217,9 @@ git tag -a v2.1.0 -m "..." && git push origin v2.1.0
 | `sif/version.py` | The one place the version lives; CI stamps it from the git tag. |
 | `packaging/`, `.github/workflows/release.yml` | PyInstaller spec, Inno Setup script, tag-driven release pipeline. |
 | `test_sif.py` | 74 unit tests across every stage, the fusion guards, MLOps, document extraction and the Qt widgets. |
-| `test_app2.py` | 57 tests for build 2: language handling, the local LLM, the workflow map, the review bench and the decision log. |
+| `test_app2.py` | 67 tests for build 2: language handling, the local LLM, the workflow map, the review bench, the decision log and the OCR model cache. |
 | `test_release.py` | 23 tests for versioning, the update checker and the release pipeline. |
+| `test_functional.py` | 20 end-to-end tests: both windows driven against the real `samples/` files, from import through review to a trained model. |
 | `sample_reports.csv` | Six mock rows for the batch-import demo. |
 | `samples/` | Test material for every ingestion path - an 18-report CSV, a shift log, a text-layer PDF, a scan with no text layer, and reports in five Indian languages. See `samples/README.md`. |
 | `reports/` | Generated analysis report (PDF). |

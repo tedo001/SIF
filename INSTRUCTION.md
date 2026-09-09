@@ -472,6 +472,18 @@ Run before first use, after any change, and after any environment move.
 | 6 | `python train_model.py sample_reports.csv --dry-run` | Corpus summary, exit code 0 |
 | 7 | Settings → Train XGBoost | Metrics appear; a run appears in *Recent training runs* |
 | 8 | Batch Upload → add a PDF | Backend column reads `pdf-text` or `paddleocr` |
+
+Or run the same checks automatically, with either runner:
+
+```bash
+python -m unittest discover -p "test_*.py"     # 184 tests
+python -m pytest -q                            # the same suites under pytest
+python -m unittest test_functional -v          # end-to-end only, against samples/
+```
+
+`test_functional.py` drives both windows against the files in `samples/` - import,
+analyse, dashboard, hotspots, review, export - so a change that breaks the console
+as a whole fails there even when every unit test still passes.
 | 9 | `File → Export Results CSV` | File written with explanations |
 | 10 | Settings → System Logging | Live lines; `logs/sif_console.log` exists |
 

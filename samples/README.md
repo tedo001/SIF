@@ -66,3 +66,10 @@ analysis; without it, the language handling degrades and says so.
 * `scanned_uauc_report.png` has been verified to contain no text layer, but its
   OCR output has not been checked in this repository's build environment, which
   cannot reach the PaddleOCR model hosts.
+* **The importer reads the narrative column only.** `site`, `date`, `activity`
+  and `reported_by` are in the CSV because a real export has them, but they do
+  not enter the system: the engine derives location and activity from the words
+  of the report itself. So searching the console for "Duliajan" finds nothing,
+  while searching for "permit" finds four reports. Carrying the reported site
+  through as metadata would be a change to the ingestion contract, not a bug in
+  these files.
