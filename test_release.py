@@ -28,6 +28,11 @@ class MockGitHub(BaseHTTPRequestHandler):
 
     tag = "v9.9.9"
     tamper = False
+    #: "release" publishes one; "empty" is a repository before its first tag
+    #: (404 from /latest, 200 [] from the listing); "prerelease" has published
+    #: only a pre-release, which /latest also answers 404 for; "missing" is a
+    #: repository this machine cannot see at all.
+    mode = "release"
 
     def _send(self, payload: bytes, code: int = 200, content_type="application/json"):
         self.send_response(code)
@@ -38,10 +43,19 @@ class MockGitHub(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 - http.server API
         base = f"http://{self.headers['Host']}"
-        if self.path.endswith("/releases/latest") or "/releases?" in self.path:
+        if self.mode == "missing":
+            self._send(b'{"message":"Not Found"}', 404)
+        elif self.mode == "empty" and self.path.endswith("/releases/latest"):
+            self._send(b'{"message":"Not Found"}', 404)
+        elif self.mode == "empty" and "/releases?" in self.path:
+            self._send(b"[]")
+        elif self.mode == "prerelease" and self.path.endswith("/releases/latest"):
+            self._send(b'{"message":"Not Found"}', 404)
+        elif self.path.endswith("/releases/latest") or "/releases?" in self.path:
             names = ("SIF-Console-setup.exe", "SIF-Console.dmg", "SIF-Console.AppImage")
             release = {
                 "tag_name": self.tag,
+                "prerelease": self.mode == "prerelease",
                 "body": "Fixes the thing.",
                 "published_at": "2026-01-01T00:00:00Z",
                 "html_url": "https://example.invalid/release",
@@ -127,6 +141,7 @@ class TestUpdateChecker(unittest.TestCase):
     def setUp(self) -> None:
         MockGitHub.tag = "v9.9.9"
         MockGitHub.tamper = False
+        MockGitHub.mode = "release"
 
     def checker(self, current="2.0.0", **kwargs) -> UpdateChecker:
         return UpdateChecker(repository="tedo001/SIF", current_version=current, **kwargs)
@@ -210,6 +225,31 @@ class TestUpdateChecker(unittest.TestCase):
         self.assertFalse(info.available)
         self.assertTrue(info.error)
         self.assertIn("Update check failed", info.summary())
+
+    def test_repository_without_a_release_is_not_a_failure(self) -> None:
+        """Before the first tag, /releases/latest answers 404. That is normal."""
+        MockGitHub.mode = "empty"
+        info = self.checker().check()
+        self.assertFalse(info.available)
+        self.assertTrue(info.no_release)
+        self.assertEqual(info.error, "", "an unreleased repository is not an error")
+        self.assertIn("No release has been published yet", info.summary())
+        self.assertNotIn("failed", info.summary().lower())
+
+    def test_unreachable_repository_says_which_repository(self) -> None:
+        MockGitHub.mode = "missing"
+        info = self.checker().check()
+        self.assertFalse(info.no_release)
+        self.assertIn("tedo001/SIF", info.error)
+        self.assertIn("SIF_UPDATE_TOKEN", info.error)
+
+    def test_prereleases_are_ignored_unless_asked_for(self) -> None:
+        """A repository holding only a pre-release has no stable release yet."""
+        MockGitHub.mode = "prerelease"
+        self.assertTrue(self.checker().check().no_release)
+        opted_in = self.checker(include_prereleases=True).check()
+        self.assertTrue(opted_in.available)
+        self.assertEqual(opted_in.latest, "9.9.9")
 
     def test_source_checkout_is_told_to_pull_not_to_install(self) -> None:
         info = self.checker().check()

@@ -25,6 +25,7 @@ actionable error and PDFs still work through their text layer.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import threading
@@ -160,17 +161,24 @@ class PaddleOCRBackend:
 
     @staticmethod
     def installed() -> bool:
-        """True when PaddleOCR *and* its runtime are importable.
+        """True when PaddleOCR *and* its runtime are present.
 
         ``paddleocr`` installs cleanly without ``paddlepaddle``, so checking the
-        wrapper alone would report a capability that fails at first use.
+        wrapper alone would report a capability that fails at first use - both
+        names are resolved.
+
+        They are resolved with :func:`importlib.util.find_spec`, which locates a
+        module without executing it. Importing ``paddle`` for real costs around
+        twenty seconds on Windows and prints compiler-toolchain warnings, and
+        this runs while the window is opening: the Settings tab asks it for a
+        status line. An install that is present but broken is caught by
+        :meth:`load`, which reports it through :class:`OCRUnavailable`.
         """
         try:
-            import paddle  # noqa: F401
-            import paddleocr  # noqa: F401
+            return all(importlib.util.find_spec(name) is not None
+                       for name in ("paddle", "paddleocr"))
         except Exception:  # noqa: BLE001 - a broken install is also "not available"
             return False
-        return True
 
     def load(self) -> None:
         """Instantiate the OCR engine (downloads models on first run)."""

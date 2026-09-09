@@ -105,6 +105,9 @@ class UpdateInfo:
     checksum_url: str = ""
     html_url: str = ""
     error: str = ""
+    #: True when the repository answered, but has published no release yet. This
+    #: is the normal state before the first tag and is not a failure.
+    no_release: bool = False
     assets: List[ReleaseAsset] = field(default_factory=list)
 
     @property
@@ -116,6 +119,9 @@ class UpdateInfo:
         """One line for the status bar or the log."""
         if self.error:
             return f"Update check failed: {self.error}"
+        if self.no_release:
+            return (f"No release has been published yet - running {self.current} "
+                    "from this build")
         if not self.available:
             return f"Up to date (version {self.current})"
         if not running_frozen():
@@ -163,8 +169,7 @@ class UpdateChecker:
         try:
             release = self._latest_release()
         except urllib.error.HTTPError as exc:
-            info.error = (f"GitHub returned {exc.code}"
-                          + (" - rate limited, try later" if exc.code == 403 else ""))
+            info.error = self._describe(exc)
             LOGGER.warning("Update check failed: %s", info.error)
             return info
         except Exception as exc:  # noqa: BLE001 - offline, DNS, TLS, malformed JSON
@@ -173,7 +178,11 @@ class UpdateChecker:
             return info
 
         if release is None:
-            info.error = "no published release found"
+            # The repository answered and simply has nothing published. Before the
+            # first tag that is the expected state, so it is reported, not raised.
+            info.no_release = True
+            LOGGER.info("No release published for %s yet; running %s",
+                        self.repository, self.current_version)
             return info
 
         tag = normalise(str(release.get("tag_name", "")))
@@ -199,15 +208,42 @@ class UpdateChecker:
         return info
 
     def _latest_release(self) -> Optional[dict]:
-        """Newest release, honouring the pre-release preference."""
+        """Newest release, honouring the pre-release preference.
+
+        ``releases/latest`` answers 404 both when a repository has published
+        nothing and when it cannot be seen at all, so a 404 there is resolved
+        against the listing endpoint, which answers ``200 []`` for the first case
+        and 404 for the second.
+        """
         if not self.include_prereleases:
-            body = self._get_json(f"{API_ROOT}/repos/{self.repository}/releases/latest")
+            try:
+                body = self._get_json(f"{API_ROOT}/repos/{self.repository}/releases/latest")
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    raise
+                return self._newest_listed()
             return body if isinstance(body, dict) else None
+        return self._newest_listed()
+
+    def _newest_listed(self) -> Optional[dict]:
+        """Newest release from the listing endpoint, drafts always excluded."""
         body = self._get_json(f"{API_ROOT}/repos/{self.repository}/releases?per_page=10")
         if not isinstance(body, list):
             return None
-        published = [item for item in body if not item.get("draft")]
+        published = [item for item in body if not item.get("draft")
+                     and (self.include_prereleases or not item.get("prerelease"))]
         return published[0] if published else None
+
+    def _describe(self, exc: urllib.error.HTTPError) -> str:
+        """Turn an HTTP status into something an operator can act on."""
+        if exc.code == 404:
+            return (f"repository {self.repository} is not visible from this machine - "
+                    "check the name, or set SIF_UPDATE_TOKEN if it is private")
+        if exc.code in (403, 429):
+            return f"GitHub returned {exc.code} - rate limited, try later"
+        if exc.code == 401:
+            return "GitHub returned 401 - SIF_UPDATE_TOKEN was rejected"
+        return f"GitHub returned {exc.code}"
 
     @staticmethod
     def _select_asset(assets: List[ReleaseAsset]) -> Optional[ReleaseAsset]:

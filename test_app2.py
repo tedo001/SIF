@@ -10,6 +10,7 @@ import json
 import os
 import re
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -103,6 +104,27 @@ class TestOCRLanguages(unittest.TestCase):
         joined = " ".join(UNSUPPORTED_LANGUAGES).lower()
         for language in ("bengali", "gujarati", "malayalam", "odia"):
             self.assertIn(language, joined)
+
+    def test_capability_check_does_not_import_the_paddle_runtime(self) -> None:
+        """The status line runs while the window opens; importing paddle costs
+
+        about twenty seconds on Windows, so availability is resolved from the
+        module search path instead.
+        """
+        import sys
+
+        from sif.ocr import PaddleOCRBackend
+
+        before = {name for name in sys.modules if name.split(".")[0]
+                  in ("paddle", "paddleocr")}
+        started = time.monotonic()
+        result = PaddleOCRBackend.installed()
+        elapsed = time.monotonic() - started
+        after = {name for name in sys.modules if name.split(".")[0]
+                 in ("paddle", "paddleocr")}
+        self.assertIsInstance(result, bool)
+        self.assertEqual(before, after, "the capability check must not import paddle")
+        self.assertLess(elapsed, 1.0, "the capability check must be cheap")
 
     def test_extractor_reports_the_language_it_will_use(self) -> None:
         extractor = DocumentExtractor(language="Kannada / ಕನ್ನಡ")

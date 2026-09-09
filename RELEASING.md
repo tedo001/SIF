@@ -119,6 +119,13 @@ Everything degrades: from a source checkout it says "update with `git pull`"
 rather than installing over your working tree; with no asset for the platform it
 says so; on a rate limit or an offline machine it logs and carries on.
 
+**Before the first tag** the repository has no release, and GitHub answers the
+`releases/latest` endpoint with 404. That is not a failure: the console reports
+"No release has been published yet" and carries on. A 404 is only reported as a
+problem when the repository itself cannot be seen — a wrong `SIF_UPDATE_REPO`, or
+a private repository with no `SIF_UPDATE_TOKEN`. Publish a release (section 4)
+and the check starts finding it.
+
 Configuration, if a fork or an internal mirror is used:
 
 ```bash
