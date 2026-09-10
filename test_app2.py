@@ -22,8 +22,8 @@ from sif.llm import OllamaEngine, looks_non_latin
 from sif.ocr import (LANGUAGE_CHOICES, LANGUAGES, UNSUPPORTED_LANGUAGES,
                      DocumentExtractor, resolve_language)
 from sif.pipeline import PipelineResult, SIFPipeline
-from sif.review import (DECISION_SHORT, DecisionLog, ReviewDecision, ReviewQueue,
-                        fingerprint)
+from sif.review import (DECISION_SHORT, PRIORITY_ORDER, DecisionLog, ReviewDecision,
+                        ReviewQueue, fingerprint)
 
 try:
     import PyQt6.QtWidgets  # noqa: F401
@@ -796,8 +796,15 @@ class TestSampleReports(unittest.TestCase):
         results = [pipeline.analyze(text, reference=reference)
                    for text, reference in zip(narratives, references)]
         triggers = {item.trigger for item in ReviewQueue().build(results)}
-        self.assertEqual(triggers, {"Critical risk", "Thin evidence", "Energy, no barrier"})
-        self.assertGreaterEqual(sum(1 for item in results if item.sif_potential), 4)
+        # Every trigger produced must be one the queue knows how to explain. The
+        # exact mix moves as the knowledge base improves - reports that once
+        # reached the queue as "Energy, no barrier" now carry a named barrier and
+        # arrive as flagged findings instead, which is the improvement working.
+        self.assertTrue(triggers.issubset(set(PRIORITY_ORDER)), triggers)
+        self.assertIn("Critical risk", triggers)
+        self.assertIn("Thin evidence", triggers)
+        self.assertGreaterEqual(sum(1 for item in results if item.sif_potential), 10,
+                                "the sample corpus carries at least ten real precursors")
 
     def test_the_scan_has_no_text_layer_so_ocr_has_to_run(self) -> None:
         with open(os.path.join(self.FOLDER, "scanned_uauc_report.png"), "rb") as handle:

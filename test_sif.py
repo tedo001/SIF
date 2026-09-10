@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -873,6 +874,58 @@ class TestInterfaceWidgets(unittest.TestCase):
         self.assertEqual(view.log_table.rowCount(), 1)
         self.assertEqual(view.run_table.rowCount(), 1)
         self.assertEqual(view.importance_table.rowCount(), 1)
+
+
+class TestEngineQuality(unittest.TestCase):
+    """The engine's score against the labelled set, as a floor it must not fall through.
+
+    Thresholds, not exact numbers: the point is to catch a change that quietly
+    makes the engine worse, not to freeze the knowledge base. Recall is the one
+    that matters - a missed precursor is an incident nobody looked at - but
+    precision is asserted too, because chasing recall until everything flags
+    would satisfy a recall-only test and destroy the product.
+    """
+
+    MINIMUM_RECALL = 0.90
+    MINIMUM_PRECISION = 0.90
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "evaluation"))
+        from evaluate import load, run, score
+
+        cls.numbers = score(run(load()))
+
+    def test_recall_stays_above_the_floor(self) -> None:
+        self.assertGreaterEqual(self.numbers["recall"], self.MINIMUM_RECALL,
+                                f"recall fell to {self.numbers['recall']}")
+
+    def test_precision_stays_above_the_floor(self) -> None:
+        self.assertGreaterEqual(self.numbers["precision"], self.MINIMUM_PRECISION,
+                                f"precision fell to {self.numbers['precision']}")
+
+    def test_no_precursor_is_both_missed_and_unqueued(self) -> None:
+        """The one failure with no safety net: wrong, and nobody asked to look."""
+        self.assertEqual(self.numbers["missed_and_unqueued"], 0)
+
+    def test_the_negative_controls_do_not_flag(self) -> None:
+        """Reports describing controls that held must never read as precursors."""
+        from evaluate import load, run
+
+        for item in run([case for case in load() if "-N" in case.identifier]):
+            self.assertFalse(item.predicted_sif,
+                             f"{item.case.identifier} flagged: {item.case.note}")
+
+    def test_the_labelled_set_is_balanced_enough_to_mean_something(self) -> None:
+        from evaluate import load
+
+        cases = load()
+        positives = sum(1 for case in cases if case.expected_sif)
+        self.assertGreaterEqual(len(cases), 40)
+        self.assertGreaterEqual(positives, 15)
+        self.assertGreaterEqual(len(cases) - positives, 10,
+                                "without negative controls, recall can be faked")
 
 
 if __name__ == "__main__":

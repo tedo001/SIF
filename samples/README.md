@@ -6,7 +6,7 @@ one path through the console each.
 
 | File | Path it exercises | What to expect |
 | --- | --- | --- |
-| `near_miss_reports.csv` | **Import CSV of reports** | 18 reports; 5 flag SIF potential, and all 18 reach the review queue across three triggers |
+| `near_miss_reports.csv` | **Import CSV of reports** | 18 reports; 13 flag SIF potential and 16 reach the review queue |
 | `shift_log.txt` | **Add documents** (text) | One night-shift log; splits into 6 blocks, 5 of them analysable |
 | `permit_observation.pdf` | **Add documents** (PDF text layer) | Read without OCR by `pypdfium2`; analyses as SIF potential, risk 80.7, Work Authorisation |
 | `scanned_uauc_report.png` | **Add documents** (PaddleOCR) | A page with no text layer, so the OCR path has to run |
@@ -19,13 +19,22 @@ one path through the console each.
    `near_miss_reports.csv`*. Eighteen reports analyse in a few seconds.
 2. **Look at the dashboard and the hotspots.** Duliajan OCS-4 and Rig-12 each
    appear more than once on purpose, so the hotspot detector has repeats to rank.
-3. **Work the review queue.** Every trigger is represented:
+3. **Work the review queue.** Measured with the offline encoder:
 
-   | Trigger | Reports | Why |
+   | Trigger | Count | Why |
    | --- | --- | --- |
-   | Critical risk | NM-2601, 2603, 2604, 2606, 2618 | Scored in the top band; verify before acting |
-   | Thin evidence | NM-2607, 2609-2613, 2614, 2615 | Short or vague narratives - the engine says so rather than guessing |
-   | Energy, no barrier | NM-2602, 2605, 2608, 2616, 2617 | High energy and a rule matched, but no failed barrier recognised |
+   | Critical risk | 11 | Scored in the top band; verify before it drives an intervention |
+   | Thin evidence | 5 | Short or vague narratives - the engine says so rather than guessing |
+
+   The five low-consequence reports (NM-2609 to NM-2613: a loose plate, a canteen
+   spill, back strain, and two deliberately terse ones) do not flag. That is the
+   correct answer for them.
+
+   These counts moved once already: before the barrier-vocabulary work of
+   `evaluation/`, only 5 of the 18 flagged and five more reached the queue as
+   "Energy, no barrier" - high energy, rule matched, no barrier recognised. They
+   now carry a named barrier and arrive as findings instead. Re-measure with
+   `python evaluation/evaluate.py` after any change to the knowledge base.
 
    Decide each with `1`, `2` or `3`. The bench advances by itself, decisions are
    written to disk as you go, and the trail tab keeps every one of them.

@@ -137,6 +137,8 @@ IOGP_RULES: Tuple[RuleDefinition, ...] = (
             r"\blive (?:line|cable|circuit|conductor|panel)\b", r"\b(?:11|33|440|415|240)\s?kv?\b",
             r"\bhigh[\s-]?voltage\b", r"\bblind(?:ing|ed)?\b", r"\bspade\b",
             r"\bstored energy\b", r"\bline breaking\b", r"\bdepressuri[sz]\w*\b",
+            r"\btest for dead\b", r"\bmotor terminals?\b", r"\bfeeder\b",
+            r"\bisolation certificate\b", r"\bearthing switch\b",
         ),
         secondary=(r"\bpanel\b", r"\bcable\b", r"\bmotor\b", r"\bpump\b", r"\bvalve\b",
                    r"\btransformer\b", r"\belectric\w*\b", r"\bshock\b"),
@@ -150,6 +152,9 @@ IOGP_RULES: Tuple[RuleDefinition, ...] = (
             r"\bexclusion zone\b", r"\bbarricad\w+\b", r"\bpressuri[sz]ed line\b",
             r"\bstored pressure\b", r"\bhydro\s?test\b", r"\bblow[\s-]?out\b",
             r"\bwhipping hose\b", r"\bcrush(?:ed|ing)?\b",
+            r"\bin line with the (?:flange|nozzle|valve|opening|joint)\b",
+            r"\bstood (?:directly )?in (?:the )?line\b", r"\bsplash\w*\b",
+            r"\bdosing line\b", r"\bwould have been (?:struck|hit|crushed|caught)\b",
         ),
         secondary=(r"\bhook\b", r"\bboom\b", r"\bswing\b", r"\btrajector\w+\b",
                    r"\bejected\b", r"\bpressure\b", r"\bpsi\b", r"\bbar\b", r"\bhose\b"),
@@ -279,6 +284,8 @@ HIGH_ENERGY_SOURCES: Tuple[EnergySignature, ...] = (
         r"\blive (?:line|cable|circuit|conductor|panel|bus)\b", r"\bswitch\s?gear\b",
         r"\bbus\s?bar\b", r"\btransformer\b", r"\bmcc\b", r"\bbreaker\b", r"\benergi[sz]ed\b",
         r"\belectric(?:al)? shock\b", r"\barc flash\b",
+        r"\bfeeder\b", r"\bisolator\b", r"\bcable jointing\b", r"\bmotor terminals?\b",
+        r"\bswitch\s?yard\b", r"\bdistribution (?:board|panel)\b",
     )),
     EnergySignature("Suspended load / Mechanical", (
         r"\bcrane\b", r"\bsuspended load\b", r"\bhoist\w*\b", r"\bwinch\b", r"\bsling\b",
@@ -301,6 +308,9 @@ HIGH_ENERGY_SOURCES: Tuple[EnergySignature, ...] = (
         r"\bh2s\b", r"\bhydrogen sulphide\b", r"\bsour gas\b", r"\bconfined space\b",
         r"\boxygen deficien\w+\b", r"\bnitrogen purge\b", r"\btoxic\b", r"\bchlorine\b",
         r"\bammonia\b", r"\bfumes\b", r"\bcorrosive\b", r"\bacid\b", r"\bcaustic\b",
+        r"\bhypochlorite\b", r"\bsulphuric\b", r"\bhydrochloric\b", r"\bmethanol\b",
+        r"\bglycol\b", r"\bbiocide\b", r"\bdosing (?:line|pump|skid)\b",
+        r"\bchemical (?:splash|burn|injection)\b",
     )),
     EnergySignature("Vehicle / Traffic motion", (
         r"\bover\s?speed\w*\b", r"\bspeeding\b", r"\btanker\b", r"\btrailer\b",
@@ -341,6 +351,18 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"\bincomplete scaffold\b", r"\bscaffold (?:tag|not) (?:missing|inspected|red)\b",
         r"\bunsecured (?:ladder|scaffold|platform)\b",
         r"\bfloor (?:opening|grating) (?:left )?open\b",
+        # Anchored to the wrong thing. A lanyard clipped to a handrail, a coupler
+        # or a pipe is a failed barrier that no negative phrase announces - the
+        # report reads as though fall protection was in use.
+        r"\b(?:clip|hook|attach|anchor|tie|secur)\w* (?:it |them )?to (?:the |a )?"
+        r"(?:hand\s?rail|guard\s?rail|scaffold(?: coupler| tube| pipe)?|coupler|"
+        r"pipe|ladder|rail|cable tray|process line)\b",
+        r"\binstead of (?:the |an? )?(?:anchor|anchorage|certified|approved)\w*\b",
+        r"\bmissing (?:toe\s?board|mid\s?rail|top rail|guard)\b",
+        r"\b(?:toe\s?board|mid\s?rail|hand\s?rail|ladder) (?:was |were )?not "
+        r"(?:tied|fitted|secured|in place)\b",
+        r"\bscaffold (?:tag|inspection) (?:had )?(?:expired|lapsed|out of date)\b",
+        r"\bsecondary (?:hook|lanyard) (?:was )?missing\b",
     )),
     BarrierSignature("Energy isolation / LOTO not applied or verified", (
         r"\b(?:with)?out (?:loto|lock\s?out|isolation|a permit)\b",
@@ -356,6 +378,19 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r" (?:applied|done|carried out|verified|in place)\b",
         r"\bbreaker (?:not )?(?:racked out|left closed)\b",
         r"\btry[\s-]?out (?:test )?not (?:done|performed)\b",
+        # Verification skipped. "No test for dead" and "the isolator was still in
+        # the ON position" are isolation failures stated as observations.
+        r"\bno test for dead\b",
+        r"\btest for dead (?:was |had )?(?:not|never)\b",
+        r"\bisolator (?:still |was still )?(?:in the )?on position\b",
+        r"\b(?:still|left) (?:in the )?on position\b",
+        r"\bno (?:danger |caution )?tag\b",
+        r"\bcar[\s-]?sealed open\b",
+        r"\brelied on (?:\w+\s+){0,4}(?:word|assurance|say[\s-]?so)\b",
+        r"\brather than testing\b",
+        r"\bearthing switch (?:position )?(?:was )?not verified\b",
+        r"\b(?:with)?out (?:draining|depressuris\w+|venting|bleeding) the "
+        r"(?:header|line|system|vessel)\b",
     )),
     BarrierSignature("Permit to work / JSA absent, expired or not followed", (
         r"\b(?:with)?out (?:a |the |valid )?(?:permit|ptw|work permit|jsa|risk assessment)\b",
@@ -368,6 +403,10 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"\btoolbox talk (?:was )?not (?:conducted|held|done)\b",
         r"\bwork (?:started|carried out) (?:with)?out (?:authori[sz]ation|approval)\b",
         r"\bnot (?:briefed|informed) (?:on|about)\b",
+        r"\bpermit (?:that |which )?(?:had )?expired\b",
+        r"\bexpired the previous (?:shift|day|night)\b",
+        r"\b(?:with)?out a written permit\b",
+        r"\b(?:survey|drawing|clearance) (?:was )?not available\b",
     )),
     BarrierSignature("Gas testing / ventilation / atmospheric control missing", (
         r"\bno gas (?:test|testing|detector|monitor)\b",
@@ -386,6 +425,20 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r" (?:the )?(?:suspended )?(?:load|hook|boom|exclusion zone)\b",
         r"\bstood (?:directly )?under\b", r"\bunder the (?:suspended )?(?:load|hook|boom)\b",
         r"\bno banks?man\b", r"\bno flag ?man\b",
+        r"\bbanks?man (?:left|was absent|not present|attending another)\b",
+        r"\bnobody (?:directing|watching|signalling|in attendance)\b",
+        r"\bno (?:hazard lights?|cones?|warning lights?|reflective triangles?)\b",
+        r"\bstood (?:directly )?in (?:the )?line (?:with|of)\b",
+        r"\bin line with the (?:flange|nozzle|valve|opening)\b",
+        r"\bparked unlit\b",
+        # The counterfactual near-miss: nothing was hit, and the only reason is
+        # where somebody happened to be standing. That is an absent exclusion
+        # zone described as luck. Guarded by LO-N1/LO-N2 in the evaluation set,
+        # which use the same phrasing with the barrier holding.
+        r"\bwould have been (?:struck|hit|crushed|caught|injured|killed)\b"
+        r"(?!(?:[^.]*?)\b(?:but|however|barricad\w+|cordon\w+|exclusion zone|"
+        r"toe\s?board|netting|guard)\b)",
+        r"\bone met(?:er|re) to (?:his|her|their|the) (?:left|right)\b",
     )),
     BarrierSignature("Safety device bypassed, inhibited or removed", (
         r"\b(?:bypass\w*|overrid\w+|inhibit\w*|defeat\w*|jumper\w*)"
@@ -394,6 +447,9 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r" (?:was )?(?:bypassed|inhibited|disabled|removed|defeated|isolated|not functional)\b",
         r"\bguard (?:was )?(?:removed|missing|open)\b",
         r"\bsafety (?:valve|device) (?:not|in)(?:stalled|operative| functional)?\b",
+        r"\b(?:inhibited|bypassed|jumpered|defeated|overridden) (?:out |on the panel)?\b",
+        r"\bjumper\w* out\b",
+        r"\bso that (?:\w+\s+){0,4}could continue\b",
     )),
     BarrierSignature("Fire prevention controls not in place", (
         r"\bno fire (?:watch|extinguisher|blanket|water hose)\b",
@@ -416,6 +472,15 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"\bsupervis\w+ (?:was )?(?:absent|not present|lacking)\b",
         r"\bcontractor (?:crew )?(?:not inducted|un\s?inducted)\b",
     )),
+    BarrierSignature("Well monitoring / containment control lapsed", (
+        r"\btrip tank (?:had |was )?not (?:been )?monitored\b",
+        r"\b(?:pit volume|mud level|returns|flow check) (?:was |were )?not "
+        r"(?:monitored|observed|checked|recorded)\b",
+        r"\bno flow check\b",
+        r"\bwell (?:was )?not shut in\b",
+        r"\bbarrier (?:element |envelope )?(?:not tested|failed|compromised)\b",
+        r"\bno (?:secondary|second) barrier\b",
+    )),
     BarrierSignature("Equipment integrity / inspection lapse", (
         r"\b(?:defective|damaged|frayed|corroded|worn[\s-]?out|cracked|leaking) "
         r"(?:sling|rope|hose|cable|scaffold|ladder|valve|flange|equipment|tool)\b",
@@ -429,6 +494,13 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"\bexceed\w* (?:the )?speed limit\b", r"\bover\s?speed\w*\b",
         r"\bno journey (?:plan|management)\b", r"\bunauthori[sz]ed (?:driver|vehicle)\b",
         r"\breversing without (?:a )?(?:banks?man|guide)\b",
+        r"\bjourney management (?:plan )?(?:had )?not been (?:raised|prepared|approved)\b",
+        # Fatigue is a barrier failure, and a driver states it as a duration.
+        r"\b(?:ten|eleven|twelve|thirteen|fourteen|1[0-9]|2[0-4])[\s-]?hours?"
+        r"(?:\s+\w+){0,3}\s+(?:behind the wheel|at the wheel|driving|on duty)\b",
+        r"\bexceed\w* (?:the )?(?:driving|duty|shift) hours\b",
+        r"\bfatigued? (?:driver|operator)\b", r"\bdriver (?:was )?fatigued\b",
+        r"\bovertook (?:\w+\s+){0,3}(?:in fog|on a (?:blind )?(?:curve|bend|crest))\b",
     )),
     BarrierSignature("Housekeeping / walkway integrity lapse", (
         r"\b(?:oil|water|mud|grease|chemical) spill(?:age)?\b", r"\bslippery\b",

@@ -1,0 +1,41 @@
+id,sif,rule,report,note
+EI-01,1,Energy Isolation,The 11 kV feeder cable was left ungrounded and the breaker was not racked out while cable jointing had already started; no LOTO was applied.,explicit LOTO failure
+EI-02,1,Energy Isolation,Live-line work was observed on the 33 kV switchyard bay isolator without a written permit and the earthing switch position was not verified.,explicit permit + isolation failure
+EI-03,1,Energy Isolation,No test for dead was carried out on the motor terminals before the fitter began refitting the coupling guard.,implicit: verification step skipped
+EI-04,1,Energy Isolation,The motor control centre panel door was left open with the isolator still in the ON position while a fuse was replaced.,implicit: still energised
+EI-05,1,Energy Isolation,The technician relied on a colleague's word that the feeder was dead rather than testing it himself.,implicit: isolation not verified
+EI-N1,0,Energy Isolation,"The 11 kV feeder was isolated, LOTO was applied by each worker and the isolation certificate was verified before work started.",NEGATIVE: controls held
+EI-N2,0,Energy Isolation,"The breaker was racked out, earthed and tagged, and a test for dead was carried out in the presence of the supervisor.",NEGATIVE: controls held
+WH-01,1,Working at Height,A crew member replacing a light fitting on the derrick monkey board at eighteen metres had his fall arrest lanyard clipped to the handrail instead of the anchor point.,implicit: anchored to the wrong thing
+WH-02,1,Working at Height,The scaffold platform around the mud tank had one missing toe board and the access ladder was not tied while two people worked on it.,explicit: incomplete scaffold
+WH-03,1,Working at Height,A contract worker was standing on an incomplete scaffold at six metres near the crude tank roof; he wore a full-body harness but the lanyard was not anchored.,explicit
+WH-04,1,Working at Height,The welder on the pipe rack platform had hooked his lanyard to the scaffold coupler and the scaffold tag had expired.,implicit: wrong anchor + expired tag
+WH-N1,0,Working at Height,"The technician worked at eighteen metres with his twin lanyard anchored to the certified anchor point, the scaffold tag was current and a rescue plan was briefed.",NEGATIVE: controls held
+CS-01,1,Confined Space,Two workers entered the separator sump for cleaning without gas testing and without forced ventilation; H2S was later detected at the manway and no hole watch was posted.,explicit
+CS-02,1,Confined Space,Vessel entry at the effluent treatment plant went ahead on a permit that had expired the previous shift.,explicit: permit expired
+CS-N1,0,Confined Space,"Vessel entry was carried out on a valid permit with gas testing completed, forced ventilation running and a hole watch posted throughout.",NEGATIVE: controls held
+LF-01,1,Safe Mechanical Lifting,The crane lifted a four tonne mud pump module over the shale shaker area while two contractor crew were still working underneath; the lift plan had no exclusion zone.,explicit: personnel under load
+LF-02,1,Safe Mechanical Lifting,The banksman left the lift to attend another job and the load was slewed over the walkway with nobody directing the operator.,implicit: no banksman during lift
+LF-N1,0,Safe Mechanical Lifting,"The lift proceeded under an approved lift plan with the exclusion zone barricaded, tag lines used and the banksman in position throughout.",NEGATIVE: controls held
+LO-01,1,Line of Fire,A dosing line carrying concentrated sodium hypochlorite was opened without draining the header and the operator stood directly in line with the flange; splash reached his coverall.,explicit: stood in line of fire
+LO-02,1,Line of Fire,Had the operator been standing one metre to his left he would have been struck by the swinging load as the tag line was released.,"hedged near-miss, real exposure"
+HW-01,1,Hot Work,"A fitter used an angle grinder next to the LPG filling carousel; the hot work permit covered a different bay, no fire watch was present and the gas test was six hours old.",explicit
+HW-N1,0,Hot Work,"Grinding was carried out inside the workshop hot work bay with a valid permit, a fire watch posted and a gas test taken thirty minutes earlier.",NEGATIVE: controls held
+EX-01,1,Excavation & Ground Disturbance,An excavator struck a buried cable while trenching along the right of way; the utility survey drawing was not available and no hand digging was done in the marked corridor.,explicit
+EX-02,1,Excavation & Ground Disturbance,An unattended open excavation about 1.5 m deep was found near the approach road with no barricade or warning light after dark.,explicit: no barricading
+EX-N1,0,Excavation & Ground Disturbance,"The trench was excavated after the utility survey was confirmed, hand digging was used within the corridor and the excavation was barricaded and lit overnight.",NEGATIVE: controls held
+DR-01,1,Driving,A crew bus overtook a tanker on the field road in fog and returned to its lane sharply to avoid an oncoming tractor; no journey management plan had been raised and the driver had completed eleven hours at the wheel.,explicit: fatigue + no JMP
+DR-02,1,Driving,The tanker was parked unlit on a blind curve of the approach road with the driver resting in the cab and no hazard lights or cones out.,implicit: no warning devices
+DR-N1,0,Driving,"The journey was made under an approved journey management plan with a relief driver, seatbelts worn and the IVMS showing no over-speed events.",NEGATIVE: controls held
+PC-01,1,Well Control & Process Containment,Gas cut mud was observed at the flow line with an increase in pit volume during a connection; the trip tank had not been monitored for the previous two connections.,explicit: monitoring gap
+PC-02,1,Well Control & Process Containment,"The discharge valve was found car-sealed open with no tag and no entry in the valve register while the line was at twelve bar, and a bleed was attempted before the isolation was verified.",implicit: isolation not verified
+PC-N1,0,Well Control & Process Containment,The well was shut in at the annular preventer within two minutes of the flow check and the trip tank had been monitored on every connection.,NEGATIVE: controlled response
+SD-01,1,Bypassing Safety Controls,The gas detector at the compressor skid had been inhibited on the panel so that maintenance could continue without the alarm sounding.,explicit: bypass
+SD-02,1,Bypassing Safety Controls,The interlock on the conveyor guard was found jumpered out with a length of wire.,explicit: defeated interlock
+LC-01,0,Unclassified / General HSE,Loose chequered plate was found near the workshop entrance and was refitted the same morning; no one was working in the area at the time.,NEGATIVE: housekeeping
+LC-02,0,Unclassified / General HSE,Minor oil spillage on the canteen floor near the service counter was cleaned within ten minutes with absorbent granules and the area was cordoned during cleaning.,NEGATIVE: housekeeping
+LC-03,0,Unclassified / General HSE,"A storekeeper reported back strain after lifting cartons above shoulder height; no injury, and a step platform has been provided.",NEGATIVE: ergonomics
+LC-04,0,Unclassified / General HSE,The notice board in the camp recreation room was found with out-of-date safety posters and has been refreshed.,NEGATIVE: administrative
+LC-05,0,Unclassified / General HSE,A tap in the wash room was dripping and has been reported to the maintenance help desk.,NEGATIVE: trivial
+LO-N1,0,Line of Fire,"The load was slewed clear of the walkway; had anyone been standing there they would have been struck, but the exclusion zone was barricaded and the banksman kept the area clear throughout.","NEGATIVE: counterfactual phrasing, barrier held"
+LO-N2,0,Line of Fire,"A spanner slipped from the fitter's hand at the pipe rack and would have struck the walkway below, but the toe board and the netting caught it and the area beneath was cordoned off.","NEGATIVE: dropped object, barrier held"

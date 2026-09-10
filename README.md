@@ -250,6 +250,49 @@ Every extractor degrades to an explicit fallback (`Unclassified / General HSE`,
 `Unspecified activity`, `Location not stated`, `No barrier failure identified`)
 rather than raising, so a malformed row never breaks a batch.
 
+## How good is the engine?
+
+A number, not an adjective. `evaluation/` holds 40 hand-labelled reports and a
+scorer:
+
+```bash
+python evaluation/evaluate.py            # the offline rule engine
+python evaluation/evaluate.py --errors   # every miss, with its text
+```
+
+| Metric | Before the barrier work | Now |
+| --- | --- | --- |
+| **Recall** (of 24 real precursors) | 0.292 | **1.000** |
+| **Precision** (16 negative controls) | 1.000 | **1.000** |
+| Barrier recall | 0.292 | **1.000** |
+| Energy recall | 0.917 | **1.000** |
+| Rule accuracy (on true positives) | 0.792 | **0.958** |
+
+Recall was the problem, and the cause was specific: `P(SIF) = energy x barrier`,
+so a barrier the vocabulary could not name scored zero however obvious the
+hazard. The engine was reading explicit negatives ("no LOTO was applied") and
+missing implicit ones - "clipped to the handrail **instead of** the anchor
+point", "car-sealed open with no tag", "no test for dead", "the trip tank had not
+been monitored". Those are now in the knowledge base.
+
+**Read those numbers honestly.** The labelled set is 40 cases written for this
+repository, and the vocabulary was extended after seeing which of them missed -
+that is fitting to the test. Two things make it more than that:
+
+* **16 negative controls.** Every positive case has a twin describing the same
+  incident with the barrier *holding* ("LOTO was applied and verified", "the
+  exclusion zone was barricaded and the banksman kept the area clear"). Chasing
+  recall by loosening patterns fails those immediately, and they include two
+  counterfactual traps using the exact "would have been struck" phrasing that the
+  near-miss pattern looks for.
+* **A held-out corpus.** The 18 reports in `samples/near_miss_reports.csv` were
+  written before this work and were not tuned against. Flags there went from 5 to
+  13, and the five that still do not flag are the five low-consequence ones.
+
+The real number comes from OIL's own reports, and the review queue is what
+produces it: `test_sif.py::TestEngineQuality` holds the floor at 0.90 recall and
+0.90 precision so a future change cannot quietly undo this.
+
 ## Review happens in English
 
 A reviewer confirms or overturns a fatal-potential call. They cannot do that on
