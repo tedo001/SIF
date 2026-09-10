@@ -23,7 +23,31 @@ from PyQt6.QtWidgets import (
 
 from ui.theme import C
 
-__all__ = ["Sidebar", "HeaderBar"]
+__all__ = ["Sidebar", "HeaderBar", "scrollable"]
+
+
+def scrollable(widget: QWidget, minimum_height: int = 0) -> QScrollArea:
+    """Wrap a page so it scrolls rather than compressing on a short screen.
+
+    Lives here rather than in :mod:`ui2.views` so every page in the build can
+    reach it - the workflow map and the review bench need it as much as the
+    dashboard does. The scrollbars themselves are styled once, globally, in
+    :mod:`ui.theme`, so a wrapped page gets the same stepper arrows as the
+    tables without asking for them.
+
+    ``minimum_height`` is the height below which the content stops shrinking and
+    the bar appears instead; leave it at zero for content that has no natural
+    floor.
+    """
+    if minimum_height:
+        widget.setMinimumHeight(minimum_height)
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setWidget(widget)
+    return area
 
 
 class Sidebar(QFrame):

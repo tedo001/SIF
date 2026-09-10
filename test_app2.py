@@ -426,6 +426,48 @@ class TestWorkflowAndInterface(unittest.TestCase):
         self.assertTrue(hasattr(ingest, "input_box"))
         self.assertEqual(ingest.language_box.count(), len(LANGUAGE_CHOICES))
 
+    def test_every_page_can_scroll_rather_than_squeeze(self) -> None:
+        """A 1366x768 plant laptop must reach every control on every page."""
+        from PyQt6.QtWidgets import QAbstractScrollArea, QScrollArea
+
+        import main2
+
+        window = main2.MainWindow()
+        try:
+            window.resize(1280, 720)
+            for key in window._page_index:
+                window.navigate(key)
+                page = window.pages.currentWidget()
+                scrollers = page.findChildren(QAbstractScrollArea)
+                self.assertTrue(scrollers, f"{key}: nothing on this page can scroll")
+                if key not in {"hotspots"}:   # a bare table scrolls itself
+                    self.assertTrue(page.findChildren(QScrollArea),
+                                    f"{key}: stacked content with no scroll area")
+        finally:
+            window.close()
+
+    def test_the_decision_buttons_are_never_scrolled_out_of_reach(self) -> None:
+        """The case detail scrolls; the three decisions stay where the eye expects."""
+        from ui2.review import ReviewView
+
+        view = ReviewView()
+        inside = view.case_scroll.findChildren(type(view.buttons["confirmed"]))
+        self.assertEqual(inside, [], "the decision bar must sit outside the scroll area")
+        self.assertIn(view.evidence, view.case_scroll.findChildren(type(view.evidence)))
+
+    def test_the_scroll_helper_sets_the_policies_the_theme_expects(self) -> None:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QFrame, QLabel
+
+        from ui2.components import scrollable
+
+        area = scrollable(QLabel("content"), 640)
+        self.assertTrue(area.widgetResizable())
+        self.assertEqual(area.frameShape(), QFrame.Shape.NoFrame)
+        self.assertEqual(area.verticalScrollBarPolicy(),
+                         Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.assertEqual(area.widget().minimumHeight(), 640)
+
     def test_original_build_is_untouched(self) -> None:
         """app.py must keep working exactly as before."""
         import app

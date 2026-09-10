@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.theme import C
+from ui2.components import scrollable
 
 __all__ = ["STAGES", "StageCard", "WorkflowMap"]
 
@@ -113,6 +114,8 @@ class WorkflowMap(QWidget):
     stage_activated = pyqtSignal(str)
 
     COLUMNS = 4
+    #: Below this the map scrolls instead of squeezing the cards.
+    MIN_CONTENT_HEIGHT = 720
 
     def __init__(self) -> None:
         super().__init__()
@@ -142,13 +145,21 @@ class WorkflowMap(QWidget):
         for column in range(self.COLUMNS):
             grid.setColumnStretch(column * 2, 1)
 
-        layout = QVBoxLayout(self)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(8)
         layout.addWidget(heading)
         layout.addWidget(caption)
         layout.addLayout(grid, stretch=1)
         layout.addWidget(self._legend())
+
+        # Eight cards and a legend do not fit a laptop screen at 1366x768, and a
+        # card whose status line is cut off is worse than useless - the status is
+        # the whole point of the map. Below MIN_CONTENT_HEIGHT it scrolls.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scrollable(content, self.MIN_CONTENT_HEIGHT))
 
     @staticmethod
     def _arrow(glyph: str) -> QLabel:

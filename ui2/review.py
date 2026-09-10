@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.components import DataTable, FieldRow, Panel, Pill
+from ui2.components import scrollable
 from ui.theme import BAND_COLORS, C
 
 __all__ = ["ReviewView", "QUEUE_COLUMNS", "TRAIL_COLUMNS", "DECISION_BUTTONS"]
@@ -87,6 +88,9 @@ class ReviewView(QWidget):
     reviewer_changed = pyqtSignal(str)
     #: Row index within the currently displayed queue.
     row_selected = pyqtSignal(int)
+
+    #: Below this the case detail scrolls; the decision bar never does.
+    MIN_CASE_HEIGHT = 560
 
     def __init__(self) -> None:
         super().__init__()
@@ -156,6 +160,14 @@ class ReviewView(QWidget):
         return panel
 
     def _build_bench(self) -> QWidget:
+        """The case on the right: detail that scrolls, decisions that do not.
+
+        The three decision buttons are the only controls on this page that must
+        never move or be scrolled out of reach - a reviewer working a queue looks
+        for them in the same place every time. So the case detail above them
+        scrolls inside its own area, and the decision bar stays pinned to the
+        bottom of the panel however short the window is.
+        """
         panel = Panel("Report under review")
 
         self.trigger_pill = Pill("NO SELECTION", C.TEXT_DIM)
@@ -195,20 +207,27 @@ class ReviewView(QWidget):
         self.evidence.setPlaceholderText(
             "The cues and the decision path behind this report appear here.")
 
-        panel.body.addLayout(pills)
-        panel.add(self.reference)
-        panel.add(self.reason)
-        panel.add(self.narrative)
+        case = QWidget()
+        case_layout = QVBoxLayout(case)
+        case_layout.setContentsMargins(0, 0, 0, 0)
+        case_layout.setSpacing(8)
+        case_layout.addLayout(pills)
+        case_layout.addWidget(self.reference)
+        case_layout.addWidget(self.reason)
+        case_layout.addWidget(self.narrative)
         for row in self.fields.values():
-            panel.add(row)
+            case_layout.addWidget(row)
         opinions_caption = QLabel("WHAT EACH ENGINE SAID")
         opinions_caption.setObjectName("Caption")
-        panel.add(opinions_caption)
-        panel.add(self.opinions)
+        case_layout.addWidget(opinions_caption)
+        case_layout.addWidget(self.opinions)
         evidence_caption = QLabel("EVIDENCE AND DECISION PATH")
         evidence_caption.setObjectName("Caption")
-        panel.add(evidence_caption)
-        panel.add(self.evidence, stretch=1)
+        case_layout.addWidget(evidence_caption)
+        case_layout.addWidget(self.evidence, stretch=1)
+
+        self.case_scroll = scrollable(case, self.MIN_CASE_HEIGHT)
+        panel.add(self.case_scroll, stretch=1)
         panel.add(self._build_decision_bar())
         return panel
 

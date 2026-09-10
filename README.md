@@ -243,10 +243,24 @@ rather than raising, so a malformed row never breaks a batch.
 
 ## Scrolling
 
-Every page that can outgrow the window scrolls rather than compressing: the
-dashboard, batch upload, analytics and settings pages each sit in a scroll area
-with a minimum content height, the sidebar nav scrolls on short screens, and all
-tables scroll per pixel in both directions.
+Every page that can outgrow the window scrolls rather than compressing. Each
+sits in a scroll area with a minimum content height below which the bar appears
+instead of the content shrinking; the sidebar nav scrolls on short screens; and
+all tables scroll per pixel in both directions. Verified at **1280 x 720** - a
+plant laptop, not a desk monitor - with every page reachable:
+
+| Build 2 page | How it scrolls |
+| --- | --- |
+| Workflow map | The eight stage cards and the legend, below 720 px |
+| Ingest and OCR, Dashboard, Engines, Settings | Whole page, below their own floors |
+| Reports and evidence | Matrix scrolls itself; the detail column has its own area |
+| Risk hotspots | The table, in both directions |
+| Human review | Queue table scrolls; the case detail scrolls; **the three decision buttons never do** - they stay pinned where the reviewer's eye expects them |
+| Analytics | Whole page, below 900 px |
+
+The scrollbars themselves - track, thumb and the stepper arrows from
+`ui/assets/` - are styled once, globally, so anything wrapped in a scroll area
+picks them up without asking.
 
 The controls themselves are styled to match the rest of the console - a sunken
 track, a light rounded thumb, and stepper arrows at both ends drawn from the PNGs

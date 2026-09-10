@@ -12,19 +12,18 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from ui2.components import scrollable
 from ui.charts import DonutChart, HBarChart
 from ui.components import DataTable, FieldRow, KpiTile, Panel, Pill
 from ui.theme import BAND_COLORS, C
@@ -36,18 +35,8 @@ from ui.views import (
     RUN_COLUMNS,
 )
 
-__all__ = ["DashboardView", "IngestView", "EnginesView", "SettingsView", "ReportView"]
-
-
-def scrollable(widget: QWidget, minimum_height: int = 0) -> QScrollArea:
-    """Wrap a page so it scrolls rather than compressing on a short screen."""
-    if minimum_height:
-        widget.setMinimumHeight(minimum_height)
-    area = QScrollArea()
-    area.setWidgetResizable(True)
-    area.setFrameShape(QFrame.Shape.NoFrame)
-    area.setWidget(widget)
-    return area
+__all__ = ["DashboardView", "IngestView", "EnginesView", "SettingsView",
+           "ReportView", "scrollable"]
 
 
 class DashboardView(QWidget):
@@ -306,6 +295,9 @@ class ReportView(QWidget):
 
     row_selected = pyqtSignal(int)
 
+    #: Below this the detail column scrolls rather than squeezing its rows.
+    MIN_DETAIL_HEIGHT = 620
+
     def __init__(self) -> None:
         super().__init__()
         layout = QHBoxLayout(self)
@@ -356,8 +348,10 @@ class ReportView(QWidget):
         detail.add(caption)
         detail.add(self.evidence, stretch=1)
 
+        # Eight stacked field rows plus the evidence box do not survive a short
+        # window: without this the rows compress until the values are unreadable.
         layout.addWidget(matrix, stretch=5)
-        layout.addWidget(detail, stretch=3)
+        layout.addWidget(scrollable(detail, self.MIN_DETAIL_HEIGHT), stretch=3)
 
     def show_detail(self, result: Optional[Dict[str, object]]) -> None:
         """Render one report, or clear the panel."""
@@ -601,9 +595,13 @@ class SettingsView(QWidget):
     logs_refreshed = pyqtSignal()
     tracking_changed = pyqtSignal(str, str)
 
+    #: Below this the page scrolls instead of squeezing the log view away.
+    MIN_CONTENT_HEIGHT = 640
+
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
@@ -656,6 +654,10 @@ class SettingsView(QWidget):
 
         layout.addWidget(tracking)
         layout.addWidget(logging_panel, stretch=1)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scrollable(content, self.MIN_CONTENT_HEIGHT))
 
     def set_log_rows(self, rows) -> None:
         self.log_table.set_rows(rows)
