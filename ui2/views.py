@@ -382,7 +382,14 @@ class ReportView(QWidget):
         self.risk.setText(f"Risk: {float(result.get('risk_score', 0.0)):.1f}")
         self.risk.set_colour(BAND_COLORS.get(band, C.OK))
         self.reference.setText(str(result.get("reference") or "unreferenced report"))
-        self.narrative.setPlainText(str(result.get("raw_text", "")))
+        # English is what was analysed and what a reviewer reads; the original
+        # stays in the evidence panel below, which is the audit record.
+        english = str(result.get("translated_text", ""))
+        language = str(result.get("source_language", "")) or "another language"
+        self.narrative.setPlainText(english or str(result.get("raw_text", "")))
+        self.narrative.setToolTip(
+            f"English rendering, translated from {language}. The original is under "
+            "EVIDENCE AND REASONING." if english else "")
 
         self.fields["rule"].set_value(str(result.get("iogp_rule", "-")))
         self.fields["energy"].set_value(str(result.get("energy_source", "-")))
@@ -405,6 +412,7 @@ class ReportView(QWidget):
         ) or "none"
         risk = evidence.get("risk", {}) or {}
         llm = evidence.get("llm", {}) or {}
+        original = str(result.get("raw_text", ""))
         translated = str(result.get("translated_text", ""))
         html = [
             f"<b>{result.get('explanation', '')}</b>",
@@ -415,8 +423,9 @@ class ReportView(QWidget):
             f"<p style='color:{C.TEXT_DIM};margin:6px 0 0 0'>Nearest prototypes</p>{semantic}",
         ]
         if translated:
-            html.append(f"<p style='color:{C.TEXT_DIM};margin:6px 0 0 0'>English rendering "
-                        f"used for analysis</p>{translated}")
+            html.append(f"<p style='color:{C.TEXT_DIM};margin:6px 0 0 0'>Original as "
+                        f"written ({result.get('source_language') or 'source language'})"
+                        f"</p>{original}")
         if llm:
             detail = llm.get("rationale") or llm.get("error", "")
             html.append(f"<p style='color:{C.TEXT_DIM};margin:6px 0 0 0'>Local LLM "

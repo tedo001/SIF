@@ -534,9 +534,79 @@ class TestWorkflowAndInterface(unittest.TestCase):
         from ui2.review import ReviewView
 
         view = ReviewView()
-        inside = view.case_scroll.findChildren(type(view.buttons["confirmed"]))
-        self.assertEqual(inside, [], "the decision bar must sit outside the scroll area")
+        # Checked by identity, not by type: the case detail is allowed its own
+        # controls (the "show the original" toggle lives there); it is the three
+        # decision buttons specifically that must never scroll away.
+        inside = set(view.case_scroll.findChildren(type(view.buttons["confirmed"])))
+        for decision, button in view.buttons.items():
+            self.assertNotIn(button, inside, f"the {decision} button must stay pinned")
         self.assertIn(view.evidence, view.case_scroll.findChildren(type(view.evidence)))
+        self.assertIn(view.original_button, inside,
+                      "the language toggle belongs with the narrative it switches")
+
+    def test_the_bench_reviews_in_english_and_keeps_the_original(self) -> None:
+        """A reviewer cannot judge fatal potential in a script they do not read."""
+        from ui2.review import ReviewView
+
+        tamil = "\u0b8e\u0ba3\u0bcd\u0ba3\u0bc6\u0baf\u0bcd \u0b87\u0ba8\u0bcd\u0ba4"
+        english = "The 11 kV feeder cable was left ungrounded and no LOTO was applied."
+        view = ReviewView()
+        view.set_case(dict(reference="DOC-001", raw_text=tamil, translated_text=english,
+                           source_language="Tamil", sif_potential=True, risk_score=91.0,
+                           risk_band="Critical", iogp_rule="Energy Isolation",
+                           activity="-", location="-", barrier_failure="-",
+                           energy_source="-", evidence={}))
+        self.assertEqual(view.narrative.toPlainText(), english)
+        self.assertIn("ENGLISH", view.language_note.text())
+        self.assertIn("TAMIL", view.language_note.text())
+        self.assertTrue(view.original_button.isEnabled())
+
+        view.original_button.setChecked(True)
+        self.assertEqual(view.narrative.toPlainText(), tamil,
+                         "the original must stay one click away - it is the record")
+        self.assertIn("ORIGINAL", view.language_note.text())
+
+    def test_an_untranslated_report_says_so_before_a_decision(self) -> None:
+        from ui2.review import ReviewView
+
+        tamil = "\u0b8e\u0ba3\u0bcd\u0ba3\u0bc6\u0baf\u0bcd \u0b87\u0ba8\u0bcd\u0ba4"
+        view = ReviewView()
+        view.set_case(dict(reference="DOC-002", raw_text=tamil, translated_text="",
+                           source_language="", sif_potential=False, risk_score=0.0,
+                           risk_band="Low", iogp_rule="Unclassified / General HSE",
+                           activity="-", location="-", barrier_failure="-",
+                           energy_source="-", evidence={}))
+        note = view.language_note.text()
+        self.assertIn("NOT TRANSLATED", note)
+        self.assertIn("OLLAMA", note.upper())
+        self.assertFalse(view.original_button.isEnabled(),
+                         "there is no English rendering to switch away from")
+
+    def test_an_english_report_needs_no_language_ceremony(self) -> None:
+        from ui2.review import ReviewView
+
+        english = "A contractor entered the sump without a gas test."
+        view = ReviewView()
+        view.set_case(dict(reference="NM-2601", raw_text=english, translated_text="",
+                           source_language="", sif_potential=True, risk_score=88.0,
+                           risk_band="Critical", iogp_rule="Confined Space",
+                           activity="-", location="-", barrier_failure="-",
+                           energy_source="-", evidence={}))
+        self.assertEqual(view.narrative.toPlainText(), english)
+        self.assertEqual(view.language_note.text(), "ENGLISH AS WRITTEN")
+
+    def test_clearing_the_bench_clears_the_language_bar(self) -> None:
+        from ui2.review import ReviewView
+
+        view = ReviewView()
+        view.set_case(dict(reference="DOC-001", raw_text="x", translated_text="y",
+                           source_language="Tamil", sif_potential=False, risk_score=0.0,
+                           risk_band="Low", iogp_rule="-", activity="-", location="-",
+                           barrier_failure="-", energy_source="-", evidence={}))
+        view.set_case(None)
+        self.assertEqual(view.narrative.toPlainText(), "")
+        self.assertEqual(view.language_note.text(), "-")
+        self.assertFalse(view.original_button.isEnabled())
 
     def test_the_scroll_helper_sets_the_policies_the_theme_expects(self) -> None:
         from PyQt6.QtCore import Qt

@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from sif.llm import looks_non_latin
 from ui.components import DataTable, FieldRow, Panel, Pill
 from ui2.components import scrollable
 from ui.theme import BAND_COLORS, C
@@ -96,6 +97,11 @@ class ReviewView(QWidget):
         super().__init__()
         self._rows: List[Dict[str, object]] = []
         self._current = -1
+        #: The two texts for the selected report: what was written, and the
+        #: English the analysers actually read.
+        self._original = ""
+        self._english = ""
+        self._source_language = ""
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -186,6 +192,23 @@ class ReviewView(QWidget):
         self.reason.setObjectName("Faint")
         self.reason.setWordWrap(True)
 
+        # A decision is made in English. The original is one click away and is
+        # what the audit trail keeps, but the words the reviewer weighs must be
+        # words the reviewer reads - see set_case().
+        self.language_note = QLabel("-")
+        self.language_note.setObjectName("Caption")
+        self.language_note.setWordWrap(True)
+        self.original_button = QPushButton("Show the original")
+        self.original_button.setCheckable(True)
+        self.original_button.setToolTip(
+            "The reviewer decides on the English rendering. The original wording is "
+            "what the audit trail keeps, and this shows it.")
+        self.original_button.toggled.connect(self._render_narrative)
+        language_row = QHBoxLayout()
+        language_row.setSpacing(8)
+        language_row.addWidget(self.language_note, stretch=1)
+        language_row.addWidget(self.original_button)
+
         self.narrative = QTextEdit()
         self.narrative.setReadOnly(True)
         self.narrative.setFixedHeight(92)
@@ -214,6 +237,7 @@ class ReviewView(QWidget):
         case_layout.addLayout(pills)
         case_layout.addWidget(self.reference)
         case_layout.addWidget(self.reason)
+        case_layout.addLayout(language_row)
         case_layout.addWidget(self.narrative)
         for row in self.fields.values():
             case_layout.addWidget(row)
@@ -332,7 +356,11 @@ class ReviewView(QWidget):
             self.risk_pill.set_colour(C.TEXT_DIM)
             self.reference.setText("-")
             self.reason.setText("Select a report from the queue.")
+            self._original = self._english = self._source_language = ""
             self.narrative.clear()
+            self.language_note.setText("-")
+            self.original_button.setChecked(False)
+            self.original_button.setEnabled(False)
             self.evidence.clear()
             self.opinions.setText("-")
             for row in self.fields.values():
@@ -359,7 +387,13 @@ class ReviewView(QWidget):
         else:
             self.reason.setText(reason or "Queued for verification.")
 
-        self.narrative.setPlainText(str(result.get("raw_text", "")))
+        self._original = str(result.get("raw_text", ""))
+        self._english = str(result.get("translated_text", ""))
+        self._source_language = str(result.get("source_language", ""))
+        self.original_button.setChecked(False)
+        self.original_button.setEnabled(bool(self._english))
+        self._render_narrative()
+
         self.fields["rule"].set_value(str(result.get("iogp_rule", "-")))
         self.fields["energy"].set_value(str(result.get("energy_source", "-")))
         self.fields["barrier"].set_value(str(result.get("barrier_failure", "-")))
@@ -368,6 +402,43 @@ class ReviewView(QWidget):
         self.opinions.setText(self._opinions(result))
         self.evidence.setHtml(self._evidence_html(result))
         self.note.setText(str(decision.get("note", "")) if decision else "")
+
+    def _render_narrative(self) -> None:
+        """Show the English rendering, unless the reviewer asked for the original.
+
+        A reviewer confirms or overturns a fatal-potential call. They cannot do
+        that on words they do not read, so the bench shows English whenever an
+        English rendering exists, and says which text is on screen either way.
+        The original is never hidden - it is one button away, and it is what the
+        decision log and the audit trail keep.
+        """
+        showing_original = self.original_button.isChecked()
+        if self._english:
+            language = self._source_language or "another language"
+            self.narrative.setPlainText(self._original if showing_original else self._english)
+            self.original_button.setText(
+                "Show the English" if showing_original else "Show the original")
+            self.language_note.setText(
+                f"ORIGINAL AS WRITTEN ({language.upper()}) - THE ENGLISH IS WHAT WAS ANALYSED"
+                if showing_original else
+                f"ENGLISH - TRANSLATED FROM {language.upper()} FOR REVIEW")
+            self.language_note.setStyleSheet(f"color: {C.WARN};" if showing_original
+                                             else f"color: {C.TEXT_DIM};")
+            return
+
+        self.narrative.setPlainText(self._original)
+        self.original_button.setText("Show the original")
+        if looks_non_latin(self._original):
+            # The reviewer is about to decide on words the engine could not read
+            # either. Say so rather than letting a thin-evidence verdict look
+            # like a judgement about the incident.
+            self.language_note.setText(
+                "NOT TRANSLATED - THIS REPORT IS NOT IN ENGLISH AND WAS ANALYSED AS "
+                "WRITTEN. START OLLAMA AND RE-ANALYSE BEFORE DECIDING.")
+            self.language_note.setStyleSheet(f"color: {C.DANGER};")
+        else:
+            self.language_note.setText("ENGLISH AS WRITTEN")
+            self.language_note.setStyleSheet(f"color: {C.TEXT_DIM};")
 
     def advance(self) -> None:
         """Move to the next undecided report, or clear the bench when none is left.

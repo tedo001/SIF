@@ -250,6 +250,24 @@ Every extractor degrades to an explicit fallback (`Unclassified / General HSE`,
 `Unspecified activity`, `Location not stated`, `No barrier failure identified`)
 rather than raising, so a malformed row never breaks a batch.
 
+## Review happens in English
+
+A reviewer confirms or overturns a fatal-potential call. They cannot do that on
+words they do not read, so wherever a report is put to a person - the review
+bench and the report detail - the **English rendering is what is shown**, and the
+bar above it says which text is on screen:
+
+| The report | What the bench shows | What the bar says |
+| --- | --- | --- |
+| Translated from Tamil | The English | `ENGLISH - TRANSLATED FROM TAMIL FOR REVIEW`, with **Show the original** beside it |
+| Not in English, not translated | The original, because there is nothing else | `NOT TRANSLATED - ... START OLLAMA AND RE-ANALYSE BEFORE DECIDING` in red |
+| Written in English | The report | `ENGLISH AS WRITTEN` |
+
+The original is never hidden and never replaced: it is one button away on the
+bench, it sits under EVIDENCE AND REASONING on the report page, and it is what
+the decision log and the audit trail keep. The translation is for reading; the
+original is the record.
+
 ## The audit trail
 
 Settings carries two records, and they are not the same thing.
