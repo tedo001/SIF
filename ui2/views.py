@@ -59,12 +59,14 @@ class DashboardView(QWidget):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(14)
 
-        self.tile_total = KpiTile("TOTAL REPORTS", "0", C.TEXT, note="analysed so far")
+        # Coloured by what the number means, not for variety: red is exposure,
+        # amber is the ranked score, green is agreement, blue is a plain count.
+        self.tile_total = KpiTile("TOTAL REPORTS", "0", C.ACCENT, note="analysed so far")
         self.tile_sif = KpiTile("SIF-POTENTIAL", "0", C.DANGER, note="0.0% of corpus")
-        self.tile_risk = KpiTile("MEAN RISK SCORE", "0.0", C.ACCENT, unit="/ 100",
+        self.tile_risk = KpiTile("MEAN RISK SCORE", "0.0", C.WARN, unit="/ 100",
                                  note="ranked exposure")
-        self.tile_review = KpiTile("AWAITING REVIEW", "0", C.WARN, note="expert validation")
-        self.tile_engine = KpiTile("ENGINE AGREEMENT", "-", C.BLUE, note="model vs pipeline")
+        self.tile_review = KpiTile("AWAITING REVIEW", "0", C.BLUE, note="expert validation")
+        self.tile_engine = KpiTile("ENGINE AGREEMENT", "-", C.OK, note="model vs pipeline")
 
         kpis = QHBoxLayout()
         kpis.setSpacing(12)

@@ -23,25 +23,28 @@ class C:
     """Named colours. ``C.x`` reads better than a dictionary at call sites."""
 
     # Surfaces, darkest to lightest.
-    APP = "#0a1524"
-    SIDEBAR = "#0d1b2e"
-    PANEL = "#122238"
-    PANEL_ALT = "#16293f"
-    CARD = "#182f49"
-    HEADER = "#102035"
-    BORDER = "#1f3a57"
-    BORDER_SOFT = "#193049"
+    APP = "#0b1a2e"
+    SIDEBAR = "#0d1f36"
+    PANEL = "#13273f"
+    PANEL_ALT = "#182f4a"
+    CARD = "#1b3553"
+    HEADER = "#102340"
+    BORDER = "#22405f"
+    BORDER_SOFT = "#1b3350"
 
     # Text.
     TEXT = "#e8f0f8"
     TEXT_DIM = "#8fa8c0"
     TEXT_FAINT = "#5f7894"
 
-    # Brand and accents.
+    # Brand and accents. The interactive accent is blue: it carries selection,
+    # primary actions and progress, so it has to read as "this is the control
+    # you press" rather than compete with the status colours below.
     BRAND = "#e63329"
-    ACCENT = "#22d3c5"
-    ACCENT_DIM = "#0e7a72"
-    BLUE = "#3b82f6"
+    ACCENT = "#3b82f6"
+    ACCENT_DIM = "#1d4ed8"
+    ACCENT_SOFT = "#2563eb"
+    BLUE = "#60a5fa"
     PURPLE = "#8b5cf6"
 
     # Scroll controls.
@@ -117,31 +120,34 @@ QPushButton:disabled {{ color: {C.TEXT_FAINT}; border-color: {C.BORDER_SOFT}; }}
 QPushButton#Primary {{
     background-color: {C.ACCENT};
     border: 1px solid {C.ACCENT};
-    color: #04211f;
+    color: #ffffff;
 }}
-QPushButton#Primary:hover {{ background-color: #2ee9d9; }}
-QPushButton#Primary:disabled {{ background-color: {C.ACCENT_DIM}; color: #9fc9c5; }}
+QPushButton#Primary:hover {{ background-color: #5b9bff; }}
+QPushButton#Primary:pressed {{ background-color: {C.ACCENT_SOFT}; }}
+QPushButton#Primary:disabled {{ background-color: {C.ACCENT_DIM}; color: #b9cdec; }}
 QPushButton#Warning {{
     background-color: {C.WARN};
     border: 1px solid {C.WARN};
     color: #2a1a00;
 }}
+/* The selected page is a filled pill rather than a hairline on the edge: at a
+   glance across a wide window, a 3px rule on the far left is easy to lose. */
 QPushButton#Nav {{
     background-color: transparent;
     border: none;
-    border-left: 3px solid transparent;
-    border-radius: 0px;
-    padding: 11px 16px;
+    border-radius: 9px;
+    padding: 11px 14px;
+    margin: 1px 8px;
     text-align: left;
     font-weight: 600;
     color: {C.TEXT_DIM};
 }}
 QPushButton#Nav:hover {{ background-color: {C.PANEL}; color: {C.TEXT}; }}
 QPushButton#Nav:checked {{
-    background-color: {C.PANEL};
-    color: {C.TEXT};
-    border-left: 3px solid {C.ACCENT};
+    background-color: {C.ACCENT};
+    color: #ffffff;
 }}
+QPushButton#Nav:checked:hover {{ background-color: #5b9bff; }}
 
 QLineEdit, QTextEdit, QPlainTextEdit {{
     background-color: {C.PANEL_ALT};
@@ -161,7 +167,9 @@ QComboBox QAbstractItemView {{
     border: 1px solid {C.BORDER};
     selection-background-color: {C.ACCENT_DIM};
 }}
-QCheckBox {{ spacing: 8px; }}
+/* Transparent like QLabel: a checkbox inside a panel otherwise paints the app
+   background across the row and reads as a stripe through the card. */
+QCheckBox {{ spacing: 8px; background: transparent; }}
 
 QTableWidget {{
     background-color: {C.PANEL};
@@ -169,7 +177,7 @@ QTableWidget {{
     gridline-color: {C.BORDER_SOFT};
     border: 1px solid {C.BORDER};
     border-radius: 10px;
-    selection-background-color: #1c4a5e;
+    selection-background-color: #1e4275;
 }}
 QHeaderView::section {{
     background-color: {C.PANEL_ALT};
