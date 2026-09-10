@@ -100,6 +100,7 @@ QLabel#AppTitle {{ font-size: 27px; font-weight: 700; letter-spacing: 0.3px; }}
 QLabel#AppSubtitle {{ font-size: 12.5px; color: {C.TEXT_DIM}; }}
 QLabel#BrandName {{ font-size: 15px; font-weight: 700; color: {C.TEXT}; }}
 QLabel#BrandSub {{ font-size: 8px; color: {C.TEXT_DIM}; letter-spacing: 0.4px; }}
+QLabel#PageTitle {{ font-size: 21px; font-weight: 700; letter-spacing: 0.2px; }}
 QLabel#SectionTitle {{ font-size: 14.5px; font-weight: 600; color: {C.TEXT}; }}
 QLabel#Caption {{ font-size: 10.5px; color: {C.TEXT_DIM}; letter-spacing: 0.9px; }}
 QLabel#Muted {{ color: {C.TEXT_DIM}; }}

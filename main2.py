@@ -60,7 +60,7 @@ from sif.updater import UpdateChecker, UpdateInfo
 from sif.version import __version__, describe
 from ui.theme import C, STYLESHEET
 from ui.views import HOTSPOT_COLUMNS, AnalyticsView, TableView
-from ui2.components import HeaderBar, Sidebar
+from ui2.components import HeaderBar, Sidebar, titled
 from ui2.review import ReviewView
 from ui2.views import DashboardView, EnginesView, IngestView, ReportView, SettingsView
 from ui2.workflow import WorkflowMap
@@ -468,7 +468,8 @@ class MainWindow(QMainWindow):
         self.sidebar.navigated.connect(self.navigate)
         self.sidebar.select("workflow")
 
-        self.header = HeaderBar(APP_NAME, APP_SUBTITLE, "HSE Analyst", "Team member")
+        self.header = HeaderBar("Oil India Limited", "PS 26165", "HSE Analyst",
+                                "Team member")
         self.header.search_changed.connect(self._apply_filter)
 
         self.workflow = WorkflowMap()
@@ -489,12 +490,26 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self._page_index: Dict[str, int] = {}
-        for key, widget in (("workflow", self.workflow), ("ingest", self.ingest_view),
-                            ("dashboard", self.dashboard), ("reports", self.report_view),
-                            ("hotspots", self.hotspot_view), ("review", self.review_view),
-                            ("analytics", self.analytics_view),
-                            ("engines", self.engines_view), ("settings", self.settings_view)):
-            self._page_index[key] = self.pages.addWidget(widget)
+        # An empty title means the page already opens with its own heading.
+        for key, widget, title, caption in (
+                ("workflow", self.workflow, "", ""),
+                ("ingest", self.ingest_view, "Ingest and OCR",
+                 "Upload documents, extract the text, and translate it to English."),
+                ("dashboard", self.dashboard, "Dashboard",
+                 "Headline metrics and exposure charts for the whole corpus."),
+                ("reports", self.report_view, "Reports and evidence",
+                 "Every analysed report, with the cues behind each verdict."),
+                ("hotspots", self.hotspot_view, "Risk hotspots",
+                 "Sites, activities and repeat barrier failures, ranked by "
+                 "SIF-precursor density rather than volume."),
+                ("review", self.review_view, "", ""),
+                ("analytics", self.analytics_view, "Analytics",
+                 "What the trained model learned, and how well it scored."),
+                ("engines", self.engines_view, "Intelligence engines",
+                 "The encoder, the local LLM, the learned model and MLOps."),
+                ("settings", self.settings_view, "Settings",
+                 "Preferences, logging and the audit trail.")):
+            self._page_index[key] = self.pages.addWidget(titled(widget, title, caption))
 
         self.status_label = QLabel("Ready. Start on the workflow map.")
         self.status_label.setObjectName("Faint")
@@ -1464,7 +1479,10 @@ class MainWindow(QMainWindow):
         self._refresh_audit()
 
     def _refresh_logs(self) -> None:
-        if self.pages.currentWidget() is not self.settings_view:
+        # By index, not by widget identity: a page may be wrapped in its own
+        # heading, and comparing against the bare view would silently never
+        # match, leaving the log and audit tables frozen.
+        if self.pages.currentIndex() != self._page_index.get("settings"):
             return
         self._refresh_audit()
         level = self.settings_view.level_box.currentText()

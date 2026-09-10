@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, Sequence, Tuple
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -22,8 +22,9 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.theme import C
+from ui2.icons import nav_icon
 
-__all__ = ["Sidebar", "HeaderBar", "scrollable"]
+__all__ = ["Sidebar", "HeaderBar", "scrollable", "titled"]
 
 
 def scrollable(widget: QWidget, minimum_height: int = 0) -> QScrollArea:
@@ -51,7 +52,7 @@ def scrollable(widget: QWidget, minimum_height: int = 0) -> QScrollArea:
 
 
 class Sidebar(QFrame):
-    """Navigation rail. Items are ``(key, label)`` - no icons, by design."""
+    """Navigation rail. Items are ``(key, label)``; icons come from the key."""
 
     navigated = pyqtSignal(str)
 
@@ -86,9 +87,11 @@ class Sidebar(QFrame):
             row_layout.setContentsMargins(0, 0, 12, 0)
             row_layout.setSpacing(0)
 
-            button = QPushButton(f"   {label}")
+            button = QPushButton(f"  {label}")
             button.setObjectName("Nav")
             button.setCheckable(True)
+            button.setIcon(nav_icon(key))
+            button.setIconSize(QSize(18, 18))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _checked, name=key: self.navigated.emit(name))
             group.addButton(button)
@@ -133,16 +136,18 @@ class Sidebar(QFrame):
         layout.setContentsMargins(16, 16, 12, 16)
         layout.setSpacing(10)
 
-        mark = QLabel("OIL")
-        mark.setFixedSize(38, 34)
+        # "S" rather than a glyph: an ASCII letter is on every machine, which a
+        # pictograph is not, and this mark has to survive a plant workstation.
+        mark = QLabel("S")
+        mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setStyleSheet(
-            f"background-color: {C.BRAND}; color: white; border-radius: 8px;"
-            "font-size: 12px; font-weight: 700; letter-spacing: 1px;")
+            f"background-color: {C.ACCENT}; color: white; border-radius: 9px;"
+            "font-size: 17px; font-weight: 700;")
 
-        name = QLabel("Oil India Limited")
+        name = QLabel("SENTRA")
         name.setObjectName("BrandName")
-        tagline = QLabel("SENTRA  ·  PS 26165")
+        tagline = QLabel("Oil India Limited")
         tagline.setObjectName("BrandSub")
 
         text = QVBoxLayout()
@@ -182,6 +187,41 @@ class Sidebar(QFrame):
         return holder
 
 
+def titled(page: QWidget, title: str, subtitle: str) -> QWidget:
+    """Put a page behind its own heading.
+
+    The header band names the operator's organisation, not the current page, so
+    each page says what it is here instead. Pages that already open with their
+    own heading - the workflow map, the review bench - are passed through
+    untouched rather than given a second one.
+    """
+    if not title:
+        return page
+
+    heading = QLabel(title)
+    heading.setObjectName("PageTitle")
+    caption = QLabel(subtitle)
+    caption.setObjectName("Muted")
+    caption.setWordWrap(True)
+
+    wrapper = QWidget()
+    layout = QVBoxLayout(wrapper)
+    layout.setContentsMargins(20, 14, 20, 0)
+    layout.setSpacing(1)
+    layout.addWidget(heading)
+    layout.addWidget(caption)
+    layout.addWidget(page, stretch=1)
+    return wrapper
+
+
+def _divider() -> QLabel:
+    """A thin vertical rule between header items."""
+    rule = QLabel()
+    rule.setFixedSize(1, 20)
+    rule.setStyleSheet(f"background-color: {C.BORDER};")
+    return rule
+
+
 class HeaderBar(QFrame):
     """Application header: titles, search, and the live engine state."""
 
@@ -191,18 +231,22 @@ class HeaderBar(QFrame):
                  user_role: str = "") -> None:
         super().__init__()
         self.setObjectName("Header")
-        self.setFixedHeight(92)
+        self.setFixedHeight(58)
 
-        title_label = QLabel(title)
-        title_label.setObjectName("AppTitle")
-        subtitle_label = QLabel(subtitle)
-        subtitle_label.setObjectName("AppSubtitle")
+        # The product name lives on the sidebar now, so the header carries the
+        # operator's own identity instead of repeating it: a 92px band spent on
+        # a title the user already knows is 92px not spent on their reports.
+        organisation = QLabel(title)
+        organisation.setObjectName("BrandName")
+        context_label = QLabel(subtitle)
+        context_label.setObjectName("Muted")
 
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
+        titles = QHBoxLayout()
+        titles.setSpacing(10)
         titles.setContentsMargins(0, 0, 0, 0)
-        titles.addWidget(title_label)
-        titles.addWidget(subtitle_label)
+        titles.addWidget(organisation)
+        titles.addWidget(_divider())
+        titles.addWidget(context_label)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search reports, sites, activities")
