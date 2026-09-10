@@ -93,6 +93,9 @@ QFrame#Sidebar {{ background-color: {C.SIDEBAR}; }}
 QSplitter#Shell::handle {{ background-color: {C.BORDER}; }}
 QSplitter#Shell::handle:hover {{ background-color: {C.ACCENT}; }}
 QFrame#Header {{ background-color: {C.HEADER}; border-bottom: 1px solid {C.BORDER}; }}
+/* Transparent, or the block paints the app background as a darker rectangle
+   inside the header band - the same trap as an unstyled checkbox in a panel. */
+QWidget#HeaderBrand {{ background: transparent; }}
 QFrame#Footer {{ background-color: {C.HEADER}; border-top: 1px solid {C.BORDER}; }}
 QFrame#Panel {{
     background-color: {C.PANEL};

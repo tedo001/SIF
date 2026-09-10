@@ -71,7 +71,6 @@ class Sidebar(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._brand())
 
         nav = QWidget()
         nav_layout = QVBoxLayout(nav)
@@ -132,40 +131,6 @@ class Sidebar(QFrame):
             return
         badge.setText(str(count))
         badge.setVisible(count > 0)
-
-    @staticmethod
-    def _brand() -> QWidget:
-        widget = QWidget()
-        widget.setStyleSheet(f"border-bottom: 1px solid {C.BORDER};")
-        layout = QHBoxLayout(widget)
-        # 22 = the nav pill's own 8px margin plus its 14px padding, so the mark
-        # sits on the same vertical line as the icons below it.
-        layout.setContentsMargins(22, 16, 12, 16)
-        layout.setSpacing(10)
-
-        # "S" rather than a glyph: an ASCII letter is on every machine, which a
-        # pictograph is not, and this mark has to survive a plant workstation.
-        mark = QLabel("S")
-        mark.setFixedSize(34, 34)
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setStyleSheet(
-            f"background-color: {C.ACCENT}; color: white; border-radius: 9px;"
-            "font-size: 17px; font-weight: 700;")
-
-        name = QLabel("SENTRA")
-        name.setObjectName("BrandName")
-        tagline = QLabel("Oil India Limited")
-        tagline.setObjectName("BrandSub")
-
-        text = QVBoxLayout()
-        text.setSpacing(0)
-        text.setContentsMargins(0, 0, 0, 0)
-        text.addWidget(name)
-        text.addWidget(tagline)
-
-        layout.addWidget(mark)
-        layout.addLayout(text, stretch=1)
-        return widget
 
     @staticmethod
     def _footer() -> QWidget:
@@ -239,19 +204,44 @@ def _divider() -> QLabel:
 
 
 class HeaderBar(QFrame):
-    """Application header: titles, search, and the live engine state."""
+    """Full-width header: the product mark, the operator's identity, search.
+
+    It spans the whole window rather than only the content column, so the
+    product is named once at the top and the rail below it carries nothing but
+    navigation. :meth:`set_rail_width` keeps the mark's block exactly as wide as
+    that rail, so the two share one vertical edge however the rail is dragged.
+    """
 
     search_changed = pyqtSignal(str)
 
-    def __init__(self, title: str, subtitle: str, user_name: str = "",
+    def __init__(self, product: str, title: str, subtitle: str, user_name: str = "",
                  user_role: str = "") -> None:
         super().__init__()
         self.setObjectName("Header")
         self.setFixedHeight(58)
 
-        # The product name lives on the sidebar now, so the header carries the
-        # operator's own identity instead of repeating it: a 92px band spent on
-        # a title the user already knows is 92px not spent on their reports.
+        self.brand = QWidget()
+        self.brand.setObjectName("HeaderBrand")
+        brand_layout = QHBoxLayout(self.brand)
+        # 22 = the nav pill's 8px margin plus its 14px padding, so the mark sits
+        # on the same vertical line as the icons beneath it.
+        brand_layout.setContentsMargins(22, 0, 12, 0)
+        brand_layout.setSpacing(10)
+
+        # "S" rather than a glyph: an ASCII letter is on every machine, which a
+        # pictograph is not, and this mark has to survive a plant workstation.
+        mark = QLabel("S")
+        mark.setFixedSize(30, 30)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setStyleSheet(
+            f"background-color: {C.ACCENT}; color: white; border-radius: 8px;"
+            "font-size: 16px; font-weight: 700;")
+        product_label = QLabel(product)
+        product_label.setObjectName("BrandName")
+        brand_layout.addWidget(mark)
+        brand_layout.addWidget(product_label)
+        brand_layout.addStretch(1)
+
         organisation = QLabel(title)
         organisation.setObjectName("BrandName")
         context_label = QLabel(subtitle)
@@ -259,7 +249,7 @@ class HeaderBar(QFrame):
 
         titles = QHBoxLayout()
         titles.setSpacing(10)
-        titles.setContentsMargins(0, 0, 0, 0)
+        titles.setContentsMargins(PAGE_MARGIN, 0, 0, 0)
         titles.addWidget(organisation)
         titles.addWidget(_divider())
         titles.addWidget(context_label)
@@ -294,14 +284,19 @@ class HeaderBar(QFrame):
         user_text.addWidget(role)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(PAGE_MARGIN, 10, PAGE_MARGIN, 10)
+        layout.setContentsMargins(0, 10, PAGE_MARGIN, 10)
         layout.setSpacing(14)
+        layout.addWidget(self.brand)
         layout.addLayout(titles)
         layout.addStretch(1)
         layout.addWidget(self.engine_label)
         layout.addWidget(self.search)
         layout.addWidget(avatar)
         layout.addLayout(user_text)
+
+    def set_rail_width(self, width: int) -> None:
+        """Match the brand block to the navigation rail beneath it."""
+        self.brand.setFixedWidth(max(width, 0))
 
     def set_engines(self, text: str) -> None:
         """Show which engines are live, in the header."""

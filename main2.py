@@ -83,6 +83,9 @@ APP_SUBTITLE = ("Sense the Risk  ·  Stop the Incident   |   UA/UC and near-miss
 #: Wait before the start-up update check so it never competes with first paint.
 UPDATE_CHECK_DELAY_MS = 4000
 
+#: Starting width of the navigation rail; the operator can drag it.
+RAIL_WIDTH = 238
+
 NAV_ITEMS = (
     ("workflow", "Workflow map"),
     ("ingest", "Ingest and OCR"),
@@ -469,8 +472,8 @@ class MainWindow(QMainWindow):
         self.sidebar.navigated.connect(self.navigate)
         self.sidebar.select("workflow")
 
-        self.header = HeaderBar("Oil India Limited", "PS 26165", "HSE Analyst",
-                                "Team member")
+        self.header = HeaderBar(APP_NAME, "Oil India Limited", "PS 26165",
+                                "HSE Analyst", "Team member")
         self.header.search_changed.connect(self._apply_filter)
 
         self.workflow = WorkflowMap()
@@ -530,22 +533,34 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
-        right_layout.addWidget(self.header)
         right_layout.addWidget(self.pages, stretch=1)
         right_layout.addWidget(footer)
 
         # A splitter, so the rail is the operator's to size rather than a fixed
         # column. Collapsing is off: a nav that can be dragged out of existence
         # leaves no way back to it.
-        container = QSplitter(Qt.Orientation.Horizontal)
-        container.setObjectName("Shell")
-        container.setChildrenCollapsible(False)
-        container.setHandleWidth(1)
-        container.addWidget(self.sidebar)
-        container.addWidget(right)
-        container.setStretchFactor(0, 0)
-        container.setStretchFactor(1, 1)
-        container.setSizes([238, 1200])
+        self.body = QSplitter(Qt.Orientation.Horizontal)
+        self.body.setObjectName("Shell")
+        self.body.setChildrenCollapsible(False)
+        self.body.setHandleWidth(1)
+        self.body.addWidget(self.sidebar)
+        self.body.addWidget(right)
+        self.body.setStretchFactor(0, 0)
+        self.body.setStretchFactor(1, 1)
+        self.body.setSizes([RAIL_WIDTH, 1200])
+        # The header runs the full width above both, so its brand block has to
+        # track the rail or the two stop sharing an edge the moment it is
+        # dragged.
+        self.body.splitterMoved.connect(
+            lambda *_: self.header.set_rail_width(self.sidebar.width()))
+        self.header.set_rail_width(RAIL_WIDTH)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.header)
+        layout.addWidget(self.body, stretch=1)
         self.setCentralWidget(container)
 
         file_menu = self.menuBar().addMenu("&File")
