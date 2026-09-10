@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import C
+from ui.theme import PAGE_MARGIN, C
 from ui2.icons import nav_icon
 
 __all__ = ["Sidebar", "HeaderBar", "scrollable", "titled"]
@@ -59,7 +59,12 @@ class Sidebar(QFrame):
     def __init__(self, items: Sequence[Tuple[str, str]]) -> None:
         super().__init__()
         self.setObjectName("Sidebar")
-        self.setFixedWidth(238)
+        # A range rather than a fixed width, so the rail can be dragged wider
+        # for long page names or narrower to buy the tables room. The floor
+        # keeps every label readable; the ceiling stops it eating the content.
+        self.setMinimumWidth(212)
+        self.setMaximumWidth(330)
+        self.resize(238, self.height())
         self._buttons: Dict[str, QPushButton] = {}
         self._badges: Dict[str, QLabel] = {}
 
@@ -133,7 +138,9 @@ class Sidebar(QFrame):
         widget = QWidget()
         widget.setStyleSheet(f"border-bottom: 1px solid {C.BORDER};")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(16, 16, 12, 16)
+        # 22 = the nav pill's own 8px margin plus its 14px padding, so the mark
+        # sits on the same vertical line as the icons below it.
+        layout.setContentsMargins(22, 16, 12, 16)
         layout.setSpacing(10)
 
         # "S" rather than a glyph: an ASCII letter is on every machine, which a
@@ -204,12 +211,21 @@ def titled(page: QWidget, title: str, subtitle: str) -> QWidget:
     caption.setObjectName("Muted")
     caption.setWordWrap(True)
 
+    # The heading carries the page margin and the page keeps its own, rather
+    # than the wrapper indenting both: nesting one inside the other put the
+    # heading a full margin to the left of the panels it belongs to.
+    head = QWidget()
+    head_layout = QVBoxLayout(head)
+    head_layout.setContentsMargins(PAGE_MARGIN, 14, PAGE_MARGIN, 0)
+    head_layout.setSpacing(1)
+    head_layout.addWidget(heading)
+    head_layout.addWidget(caption)
+
     wrapper = QWidget()
     layout = QVBoxLayout(wrapper)
-    layout.setContentsMargins(20, 14, 20, 0)
-    layout.setSpacing(1)
-    layout.addWidget(heading)
-    layout.addWidget(caption)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(head)
     layout.addWidget(page, stretch=1)
     return wrapper
 
@@ -251,7 +267,8 @@ class HeaderBar(QFrame):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search reports, sites, activities")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(300)
+        self.search.setMinimumWidth(180)
+        self.search.setMaximumWidth(420)
         self.search.textChanged.connect(self.search_changed.emit)
 
         self.engine_label = QLabel("Engines: starting")
@@ -277,7 +294,7 @@ class HeaderBar(QFrame):
         user_text.addWidget(role)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 12, 24, 12)
+        layout.setContentsMargins(PAGE_MARGIN, 10, PAGE_MARGIN, 10)
         layout.setSpacing(14)
         layout.addLayout(titles)
         layout.addStretch(1)

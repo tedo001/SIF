@@ -24,7 +24,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication,
@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QSplitter,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -58,7 +59,7 @@ from sif.pipeline import PipelineResult
 from sif.review import DECISION_LABELS, DECISION_SHORT, DecisionLog, fingerprint
 from sif.updater import UpdateChecker, UpdateInfo
 from sif.version import __version__, describe
-from ui.theme import C, STYLESHEET
+from ui.theme import PAGE_MARGIN, C, STYLESHEET
 from ui.views import HOTSPOT_COLUMNS, AnalyticsView, TableView
 from ui2.components import HeaderBar, Sidebar, titled
 from ui2.review import ReviewView
@@ -517,7 +518,7 @@ class MainWindow(QMainWindow):
         footer.setObjectName("Footer")
         footer.setFixedHeight(34)
         footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(20, 6, 20, 6)
+        footer_layout.setContentsMargins(PAGE_MARGIN, 6, PAGE_MARGIN, 6)
         left = QLabel("Oil India Limited  ·  PS 26165  ·  prototype output, not a "
                       "statutory record")
         left.setObjectName("Faint")
@@ -533,12 +534,18 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.pages, stretch=1)
         right_layout.addWidget(footer)
 
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.sidebar)
-        layout.addWidget(right, stretch=1)
+        # A splitter, so the rail is the operator's to size rather than a fixed
+        # column. Collapsing is off: a nav that can be dragged out of existence
+        # leaves no way back to it.
+        container = QSplitter(Qt.Orientation.Horizontal)
+        container.setObjectName("Shell")
+        container.setChildrenCollapsible(False)
+        container.setHandleWidth(1)
+        container.addWidget(self.sidebar)
+        container.addWidget(right)
+        container.setStretchFactor(0, 0)
+        container.setStretchFactor(1, 1)
+        container.setSizes([238, 1200])
         self.setCentralWidget(container)
 
         file_menu = self.menuBar().addMenu("&File")

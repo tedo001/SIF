@@ -151,8 +151,12 @@ class WorkflowMap(QWidget):
         layout.setSpacing(8)
         layout.addWidget(heading)
         layout.addWidget(caption)
-        layout.addLayout(grid, stretch=1)
+        # The grid takes the height its cards need and no more. Stretching it
+        # to fill a tall window left each card a third full, with its status
+        # line stranded at the bottom of an empty box.
+        layout.addLayout(grid)
         layout.addWidget(self._legend())
+        layout.addStretch(1)
 
         # Eight cards and a legend do not fit a laptop screen at 1366x768, and a
         # card whose status line is cut off is worse than useless - the status is

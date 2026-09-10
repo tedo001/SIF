@@ -10,13 +10,22 @@ from __future__ import annotations
 
 import os
 
-__all__ = ["C", "STYLESHEET", "BAND_COLORS", "SEVERITY_COLORS", "CATEGORICAL", "ASSETS"]
+__all__ = ["C", "STYLESHEET", "BAND_COLORS", "SEVERITY_COLORS", "CATEGORICAL", "ASSETS",
+           "PAGE_MARGIN"]
 
 #: Directory holding the small PNG arrows used by the scroll controls. Qt style
 #: sheets cannot draw a triangle reliably across styles, so the stepper arrows
 #: ship as assets and are addressed by absolute path (forward slashes, which Qt
 #: wants on every platform).
 ASSETS = os.path.dirname(os.path.abspath(__file__)).replace(os.sep, "/") + "/assets"
+
+#: Distance from the content edge to anything inside it - page panels, the page
+#: heading, the header band and the status footer alike. They are stacked in one
+#: column, so a different value in any of them puts a visible kink in the left
+#: edge of the window: the eye reads the misalignment long before it works out
+#: which widget is wrong. One constant, used everywhere, is what keeps that edge
+#: straight.
+PAGE_MARGIN = 18
 
 
 class C:
@@ -78,7 +87,11 @@ QWidget {{
     font-size: 13px;
 }}
 QLabel {{ background: transparent; border: none; }}
-QFrame#Sidebar {{ background-color: {C.SIDEBAR}; border-right: 1px solid {C.BORDER}; }}
+QFrame#Sidebar {{ background-color: {C.SIDEBAR}; }}
+/* The rail's right edge is the splitter handle, so the line lives there rather
+   than on the sidebar: two adjacent 1px borders read as a smudge, not a rule. */
+QSplitter#Shell::handle {{ background-color: {C.BORDER}; }}
+QSplitter#Shell::handle:hover {{ background-color: {C.ACCENT}; }}
 QFrame#Header {{ background-color: {C.HEADER}; border-bottom: 1px solid {C.BORDER}; }}
 QFrame#Footer {{ background-color: {C.HEADER}; border-top: 1px solid {C.BORDER}; }}
 QFrame#Panel {{
