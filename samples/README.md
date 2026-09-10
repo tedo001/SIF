@@ -11,6 +11,7 @@ one path through the console each.
 | `permit_observation.pdf` | **Add documents** (PDF text layer) | Read without OCR by `pypdfium2`; analyses as SIF potential, risk 80.7, Work Authorisation |
 | `scanned_uauc_report.png` | **Add documents** (PaddleOCR) | A page with no text layer, so the OCR path has to run |
 | `multilingual_report.txt` | **Language / translation** | Five blocks in Hindi, Marathi, Tamil, Telugu and Kannada |
+| `languages/` | **One report per language** | Six full reports - Tamil, Hindi, Marathi, Telugu, Kannada, Urdu - each its own file, with its own README |
 
 ## Working through them
 
@@ -55,6 +56,23 @@ is what makes the console say so.
 **`multilingual_report.txt`** - the same kinds of incident written in five Indian
 languages. With Ollama running, build 2 renders each into English before
 analysis; without it, the language handling degrades and says so.
+
+## The language samples
+
+`languages/` holds one complete report per language rather than blocks in one
+file, so each can be fed through the console on its own with the matching OCR
+language selected. Measured behaviour, with the offline encoder and no Ollama:
+
+| File | Rule matched without translation |
+| --- | --- |
+| `tamil_report.txt` | Energy Isolation (the words LOTO and 11 kV survive in Latin script) |
+| `marathi_report.txt` | Confined Space (H2S survives) |
+| `hindi_report.txt`, `telugu_report.txt`, `kannada_report.txt`, `urdu_report.txt` | Unclassified - thin evidence |
+
+That is the point of them, not a defect: the rule engine reads English, so a
+Devanagari narrative reaches it as thin evidence and **goes to a human** rather
+than being silently cleared. Turn Ollama on, tick *Translate non-English reports*,
+and the same files analyse on their merits.
 
 ## Honest notes
 

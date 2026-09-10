@@ -1,4 +1,4 @@
-; Inno Setup script for the SIF Insight Console (Windows installer).
+; Inno Setup script for SENTRA (Windows installer).
 ;
 ; Built by CI as:
 ;   iscc /DAppVersion=%VERSION% packaging\installer.iss
@@ -10,7 +10,7 @@
   #define AppVersion "0.0.0"
 #endif
 
-#define AppName "SIF Insight Console"
+#define AppName "SENTRA"
 #define AppPublisher "Oil India Limited"
 #define AppExeName "SIFConsole.exe"
 
@@ -21,7 +21,7 @@ AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 VersionInfoVersion={#AppVersion}
-DefaultDirName={autopf}\SIF Insight Console
+DefaultDirName={autopf}\SENTRA
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist\installer

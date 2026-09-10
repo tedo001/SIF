@@ -127,7 +127,7 @@ jobs:
         run: |
           mkdir -p dist/installer
           hdiutil create -volname "SIF Insight Console" \
-            -srcfolder "dist/SIF Insight Console.app" -ov -format UDZO \
+            -srcfolder "dist/SENTRA.app" -ov -format UDZO \
             "dist/installer/SIF-Console-${{ steps.version.outputs.version }}.dmg"
           ls -lh dist/installer
 

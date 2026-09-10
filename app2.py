@@ -1,4 +1,4 @@
-"""Entry point for the SIF Insight Console, build 2.
+"""Entry point for SENTRA, build 2.
 
 Oil India Limited - Problem Statement 26165.
 
@@ -42,7 +42,7 @@ def _require_pyqt6() -> None:
         import PyQt6  # noqa: F401  (import is the check)
     except ImportError:
         sys.stderr.write(
-            "PyQt6 is required to run the SIF Insight Console.\n"
+            "PyQt6 is required to run SENTRA.\n"
             "Install it with:\n\n    pip install -r requirements.txt\n\n"
             "or:\n\n    pip install PyQt6\n"
         )

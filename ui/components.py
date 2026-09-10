@@ -439,6 +439,11 @@ class DataTable(QTableWidget):
             item.setForeground(QColor(BAND_COLORS.get(str(band), C.OK)))
         elif key in {"review_trigger", "trigger"}:
             item.setForeground(QColor(C.WARN if payload.get(key) else C.TEXT_FAINT))
+        elif key == "category":
+            # The audit trail: what an operator asked for reads brighter than what
+            # the software did by itself, because that is what an auditor scans for.
+            item.setForeground(QColor(C.INFO if payload.get(key) == "functionality"
+                                      else C.TEXT_DIM))
         elif key in {"status", "decision_label", "outcome"}:
             item.setForeground(QColor(DataTable._decision_colour(str(payload.get(key, "")))))
         elif key == "level":

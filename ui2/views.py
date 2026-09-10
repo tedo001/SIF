@@ -36,7 +36,15 @@ from ui.views import (
 )
 
 __all__ = ["DashboardView", "IngestView", "EnginesView", "SettingsView",
-           "ReportView", "scrollable"]
+           "ReportView", "scrollable", "AUDIT_COLUMNS"]
+
+AUDIT_COLUMNS: Sequence[Tuple[str, str, int]] = (
+    ("Time", "when", 158),
+    ("Kind", "category", 116),
+    ("What happened", "action", 210),
+    ("Who", "actor", 110),
+    ("Detail", "summary", 460),
+)
 
 
 class DashboardView(QWidget):
@@ -594,6 +602,10 @@ class SettingsView(QWidget):
     logs_cleared = pyqtSignal()
     logs_refreshed = pyqtSignal()
     tracking_changed = pyqtSignal(str, str)
+    audit_refreshed = pyqtSignal()
+    audit_exported = pyqtSignal()
+    #: The chosen category, or "" for everything.
+    audit_filtered = pyqtSignal(str)
 
     #: Below this the page scrolls instead of squeezing the log view away.
     MIN_CONTENT_HEIGHT = 640
@@ -654,10 +666,57 @@ class SettingsView(QWidget):
 
         layout.addWidget(tracking)
         layout.addWidget(logging_panel, stretch=1)
+        layout.addWidget(self._build_audit_panel(), stretch=1)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scrollable(content, self.MIN_CONTENT_HEIGHT))
+
+    def _build_audit_panel(self) -> Panel:
+        """The trail: what the console did, and what it was asked to do.
+
+        Separate from the log above it on purpose. The log is diagnostics and
+        rotates away; this is the record an auditor reads, and it is append-only.
+        """
+        panel = Panel("Audit trail")
+        caption = QLabel(
+            "Append-only record of what happened on this machine. SYSTEM is what the "
+            "software did by itself; FUNCTIONALITY is what an operator asked for and "
+            "what came back. The debug log above rotates - this does not.")
+        caption.setObjectName("Faint")
+        caption.setWordWrap(True)
+
+        self.audit_filter = QComboBox()
+        self.audit_filter.addItem("Everything", "")
+        self.audit_filter.addItem("System only", "system")
+        self.audit_filter.addItem("Functionality only", "functionality")
+        self.audit_filter.currentIndexChanged.connect(
+            lambda: self.audit_filtered.emit(self.audit_filter.currentData()))
+
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self.audit_refreshed.emit)
+        export = QPushButton("Export the trail as CSV")
+        export.clicked.connect(self.audit_exported.emit)
+
+        self.audit_summary = QLabel("No audit entries yet.")
+        self.audit_summary.setObjectName("Faint")
+
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+        show_label = QLabel("Show")
+        show_label.setObjectName("Muted")
+        controls.addWidget(show_label)
+        controls.addWidget(self.audit_filter)
+        controls.addWidget(refresh)
+        controls.addWidget(export)
+        controls.addStretch(1)
+        controls.addWidget(self.audit_summary)
+
+        self.audit_table = DataTable(AUDIT_COLUMNS)
+        panel.add(caption)
+        panel.body.addLayout(controls)
+        panel.add(self.audit_table, stretch=1)
+        return panel
 
     def set_log_rows(self, rows) -> None:
         self.log_table.set_rows(rows)
@@ -665,3 +724,8 @@ class SettingsView(QWidget):
 
     def set_log_path(self, path: str) -> None:
         self.log_path.setText(f"Log file: {path}")
+
+    def set_audit_rows(self, rows, note: str = "") -> None:
+        """Render the audit trail, newest first, with a one-line summary."""
+        self.audit_table.set_rows(rows)
+        self.audit_summary.setText(note or f"{len(rows)} entr(ies)")

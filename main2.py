@@ -1,4 +1,4 @@
-"""Controller for the second build of the SIF Insight Console (``app2.py``).
+"""Controller for the second build of SENTRA (``app2.py``).
 
 What this build adds over ``main.py`` (which ``app.py`` keeps using, unchanged):
 
@@ -50,12 +50,13 @@ from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
                                log_file_path, set_level)
 from sif.mlops import MLOpsService
 from sif import prefs
+from sif.audit import AuditLog
 from sif.ocr import (LANGUAGE_CHOICES, UNSUPPORTED_LANGUAGES, DocumentExtractor,
                      cache_directory, models_present)
 from sif.pipeline import PipelineResult
 from sif.review import DECISION_LABELS, DECISION_SHORT, DecisionLog, fingerprint
 from sif.updater import UpdateChecker, UpdateInfo
-from sif.version import describe
+from sif.version import __version__, describe
 from ui.theme import C, STYLESHEET
 from ui.views import HOTSPOT_COLUMNS, AnalyticsView, TableView
 from ui2.components import HeaderBar, Sidebar
@@ -69,8 +70,14 @@ __all__ = ["AnalysisWorker", "ExtractionWorker", "TrainingWorker", "ProbeWorker"
 
 LOGGER = logging.getLogger("sif.app2")
 
-APP_NAME = "SIF Insight Console"
-APP_SUBTITLE = "UA/UC and near-miss intelligence   |   PS 26165   |   build 2"
+APP_NAME = "SENTRA"
+#: The product is SENTRA; "SIF Insight Console" was the working title and
+#: survives only where renaming would move an operator's data - the
+#: settings directory in :mod:`sif.prefs`, which holds their review
+#: decisions, and the ``sif`` package itself.
+APP_LONG_NAME = "SENTRA - SIF Insight Console"
+APP_SUBTITLE = ("Sense the Risk  ·  Stop the Incident   |   UA/UC and near-miss "
+                "intelligence   |   PS 26165   |   build 2")
 #: Wait before the start-up update check so it never competes with first paint.
 UPDATE_CHECK_DELAY_MS = 4000
 
@@ -391,6 +398,13 @@ class MainWindow(QMainWindow):
         self.updater = UpdateChecker()
         self.update_worker: Optional[UpdateWorker] = None
         self.rows: List[Dict[str, object]] = []
+        #: Narrative -> row index, so a report analysed twice replaces itself.
+        self._by_narrative: Dict[str, int] = {}
+        #: Repeats seen in the batch now running, reported when it finishes.
+        self.duplicates_seen = 0
+        #: What an auditor reads: append-only, separate from the debug log.
+        self.audit = AuditLog(version=__version__)
+        self.audit.system("console started", build="2", version=describe())
         #: Set in closeEvent, so deferred work started by a timer can stand down.
         self._closing = False
         self.decisions = DecisionLog().load()
@@ -409,6 +423,8 @@ class MainWindow(QMainWindow):
         if self.mlops.load_existing():
             self.pipeline.attach_model(self.mlops)
             LOGGER.info("Attached previously trained model")
+            self.audit.system("trained model attached",
+                              state=self.mlops.status()["model"])
 
         self._refresh_engines()
         self._refresh_workflow()
@@ -491,9 +507,12 @@ class MainWindow(QMainWindow):
             ("&Import CSV export...", "Ctrl+O", self.import_csv),
             ("Add &documents...", "Ctrl+D", self.add_documents),
             ("&Export results CSV...", "Ctrl+S", self.export_csv),
+            ("Export the &audit trail...", "", self.export_audit),
+            ("&Clear the corpus", "", self.confirm_clear_corpus),
         ):
             action = QAction(label, self)
-            action.setShortcut(shortcut)
+            if shortcut:
+                action.setShortcut(shortcut)
             action.triggered.connect(slot)
             file_menu.addAction(action)
         file_menu.addSeparator()
@@ -540,6 +559,9 @@ class MainWindow(QMainWindow):
         self.settings_view.logs_cleared.connect(self.clear_logs)
         self.settings_view.logs_refreshed.connect(self._refresh_logs)
         self.settings_view.tracking_changed.connect(self.change_tracking)
+        self.settings_view.audit_refreshed.connect(self._refresh_audit)
+        self.settings_view.audit_exported.connect(self.export_audit)
+        self.settings_view.audit_filtered.connect(self._set_audit_filter)
 
     # -- navigation and the workflow map -----------------------------------
 
@@ -691,6 +713,7 @@ class MainWindow(QMainWindow):
         self._start(self._analysis_worker(texts=blocks, references=references))
 
     def _analysis_worker(self, **kwargs) -> AnalysisWorker:
+        self.duplicates_seen = 0
         # Reachability is checked once, in the worker, not per repaint.
         translator = self.llm if (self.translate_enabled and self.llm_online) else None
         return AnalysisWorker(self.pipeline, translator=translator, language=self.language,
@@ -720,7 +743,32 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, APP_NAME, f"Could not write the file:\n{exc}")
             return
         LOGGER.info("Exported %d rows to %s", len(self.rows), path)
+        self.audit.functionality("corpus exported", rows=len(self.rows), path=path)
         self._set_status(f"Exported {len(self.rows)} rows to {path}")
+
+    def confirm_clear_corpus(self) -> None:
+        """Ask before dropping the corpus - it cannot be undone from here."""
+        if not self.rows:
+            QMessageBox.information(self, APP_NAME, "There are no reports to clear.")
+            return
+        answer = QMessageBox.question(
+            self, APP_NAME,
+            f"Clear all {len(self.rows)} analysed report(s)?\n\n"
+            "Recorded review decisions are kept - they belong to the reports, not "
+            "to this session - and reappear if the same reports are analysed again.")
+        if answer == QMessageBox.StandardButton.Yes:
+            self.clear_corpus()
+
+    def clear_corpus(self) -> None:
+        """Drop every analysed report, so a fresh corpus starts empty."""
+        self.rows.clear()
+        self._by_narrative.clear()
+        self.duplicates_seen = 0
+        self.report_view.table.set_rows([])
+        self.report_view.show_detail(None)
+        self.audit.functionality("corpus cleared")
+        self._refresh()
+        self._set_status("Corpus cleared - no reports are loaded.")
 
     def clear_documents(self) -> None:
         """Drop the extraction list."""
@@ -739,6 +787,8 @@ class MainWindow(QMainWindow):
         self.extractor = DocumentExtractor(language=language,
                                            enable_ocr=self.extractor.enable_ocr)
         LOGGER.info("OCR language set to %s (code %s)", language, self.extractor.language)
+        self.audit.system("OCR language changed", language=language,
+                          code=self.extractor.language)
         status = self.extractor.status()
         self.ingest_view.set_ocr_status(status)
         self.engines_view.set_ocr_status(status)
@@ -918,7 +968,7 @@ class MainWindow(QMainWindow):
         """Version and provenance, which is what a support call asks for first."""
         QMessageBox.information(
             self, APP_NAME,
-            f"{APP_NAME} (build 2)\n"
+            f"{APP_LONG_NAME} (build 2)\n"
             f"Version {describe()}\n\n"
             "Oil India Limited - Problem Statement 26165\n"
             f"Updates: {self.updater.repository}\n\n"
@@ -949,8 +999,50 @@ class MainWindow(QMainWindow):
         self.ingest_view.set_busy(False)
         self.worker = None
 
+    @staticmethod
+    def _narrative_key(text: str) -> str:
+        """A report's identity for duplicate detection: its words, normalised."""
+        return " ".join(str(text or "").lower().split())
+
+    def _narrative_index(self) -> Dict[str, int]:
+        """Narrative -> row index, rebuilt whenever it has fallen out of step.
+
+        The index is maintained as rows arrive, but anything that replaces
+        ``self.rows`` wholesale - restoring a session, a test fixture - would
+        otherwise leave duplicate detection silently switched off. Cheaper to
+        notice and rebuild than to trust.
+        """
+        if len(self._by_narrative) != len(self.rows):
+            self._by_narrative = {
+                self._narrative_key(row.get("raw_text", "")): index
+                for index, row in enumerate(self.rows)}
+        return self._by_narrative
+
     def on_row_ready(self, payload: Dict[str, object]) -> None:
-        """One analysed report arrived."""
+        """One analysed report arrived.
+
+        The same narrative analysed twice is one incident, not two. Pressing
+        "Load seed incidents" a second time, or re-importing a CSV after adding a
+        column, used to append a whole second copy of every report - which
+        double-counts the KPIs and, worse, inflates the hotspot densities that
+        decide where an asset team spends its week. A repeat now replaces the row
+        it repeats, keeping that row's reference and position.
+        """
+        key = self._narrative_key(payload.get("raw_text", ""))
+        existing = self._narrative_index().get(key)
+        if existing is not None and existing < len(self.rows):
+            payload["reference"] = (self.rows[existing].get("reference")
+                                    or payload.get("reference") or "")
+            self.rows[existing] = payload
+            self.duplicates_seen += 1
+            self.report_view.table.set_rows(self.rows)
+            return
+
+        if not payload.get("reference"):
+            # Never leave a report anonymous: an unreferenced row shows up in the
+            # decision log as a bare hash, which nobody can look up afterwards.
+            payload["reference"] = f"REP-{len(self.rows) + 1:04d}"
+        self._by_narrative[key] = len(self.rows)
         self.rows.append(payload)
         self.report_view.table.append_row(payload)
         self.report_view.table.scrollToBottom()
@@ -960,12 +1052,20 @@ class MainWindow(QMainWindow):
     def on_analysis_completed(self, count: int) -> None:
         """A batch finished."""
         intelligence = self._refresh()
+        self.audit.functionality(
+            "reports analysed", count=count, corpus=len(self.rows),
+            sif_potential=intelligence.kpis.get("sif_potential"),
+            awaiting_review=self.outstanding_reviews,
+            duplicates_replaced=self.duplicates_seen or None,
+            encoder=intelligence.kpis.get("encoder") or "")
         LOGGER.info("Analysed %d report(s); %s SIF-potential, %s awaiting review", count,
                     intelligence.kpis.get("sif_potential"),
                     intelligence.kpis.get("needs_review"))
+        repeats = (f"  ·  {self.duplicates_seen} repeat(s) replaced"
+                   if self.duplicates_seen else "")
         self._set_status(
             f"Completed {count} report(s)  ·  {intelligence.kpis.get('sif_potential', 0)} "
-            f"SIF-potential  ·  {intelligence.kpis.get('needs_review', 0)} for review")
+            f"SIF-potential  ·  {self.outstanding_reviews} for review{repeats}")
 
     def on_document_ready(self, payload: Dict[str, object]) -> None:
         """One document was extracted."""
@@ -978,6 +1078,10 @@ class MainWindow(QMainWindow):
             self.pending_blocks.extend(blocks)
             self.ingest_view.set_preview(text[:6000])
         self._set_status(f"{payload['name']} read via {payload['backend']}")
+        self.audit.functionality("document read", name=payload.get("name"),
+                                 backend=payload.get("backend"),
+                                 pages=payload.get("pages"),
+                                 characters=payload.get("characters"))
         self._refresh_workflow()
 
     def on_probed(self, name: str, ok: bool, message: str) -> None:
@@ -990,6 +1094,7 @@ class MainWindow(QMainWindow):
             self.llm_message = message
             self.engines_view.set_llm_status(message, self.llm.models() if ok else ())
         self._set_status(message[:120])
+        self.audit.system(f"{name} check", ok=ok, outcome=message[:160])
         self._refresh_workflow()
 
     def on_trained(self, report: Dict[str, object]) -> None:
@@ -1002,6 +1107,10 @@ class MainWindow(QMainWindow):
         message = (f"Trained on {report.get('samples')} report(s) "
                    f"({report.get('positives')} positive)  ·  {metrics}")
         self._set_status(message)
+        self.audit.functionality(
+            "model trained", samples=report.get("samples"),
+            positives=report.get("positives"), labels=report.get("label_source"),
+            metrics=metrics, run_id=report.get("run_id") or "not tracked")
         if report.get("warnings"):
             QMessageBox.information(self, APP_NAME,
                                     message + "\n\n" + "\n".join(report["warnings"]))
@@ -1127,6 +1236,10 @@ class MainWindow(QMainWindow):
                 "The decision was recorded in this session but could not be written "
                 f"to:\n{self.decisions.path}\n\nIt will be lost when the console "
                 "closes. Check that the folder is writable.")
+        self.audit.functionality(
+            "review decision", reference=entry.reference or entry.fingerprint,
+            decision=entry.decision, trigger=entry.trigger,
+            overturns_engine=entry.overturns_engine, note=entry.note or None)
         self._refresh()
         self.review_view.advance()
         self._set_status(
@@ -1141,6 +1254,9 @@ class MainWindow(QMainWindow):
         if entry is None:
             self._set_status("There is no decision to undo.")
             return
+        self.audit.functionality("decision withdrawn",
+                                 reference=entry.reference or entry.fingerprint,
+                                 decision=entry.decision)
         self._refresh()
         self._set_status(
             f"Withdrew the {DECISION_LABELS[entry.decision].lower()} decision on "
@@ -1161,11 +1277,15 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, APP_NAME, f"Could not write {path}:\n{exc}")
             return
+        self.audit.functionality("decision trail exported",
+                                 entries=len(self.decisions.entries), path=path)
         self._set_status(f"Exported {len(self.decisions.entries)} decision(s) to {path}")
 
     def set_reviewer(self, name: str) -> None:
         """Remember who is reviewing, so the name is not retyped every session."""
         prefs.set_value("reviewer", name)
+        self.audit.reviewer = name
+        self.audit.system("reviewer set", reviewer=name or "unnamed")
         LOGGER.info("Reviewer set to %s", name or "unnamed")
 
     @staticmethod
@@ -1225,9 +1345,43 @@ class MainWindow(QMainWindow):
         self.ingest_view.set_ocr_status(ocr_status)
         self.settings_view.set_log_path(active_log_file() or log_file_path())
 
+    def _set_audit_filter(self, category: str) -> None:
+        self._audit_filter = category or ""
+        self._refresh_audit()
+
+    def _refresh_audit(self) -> None:
+        """Repaint the audit trail from disk."""
+        category = getattr(self, "_audit_filter", "")
+        rows = self.audit.rows(category)
+        counts = self.audit.counts()
+        note = (f"{counts['total']} entr(ies): {counts['system']} system, "
+                f"{counts['functionality']} functionality")
+        if not self.audit.writable:
+            note += "  ·  MEMORY ONLY - the trail could not be written to disk"
+        self.settings_view.set_audit_rows(rows, note)
+
+    def export_audit(self) -> None:
+        """Write the audit trail out for an auditor."""
+        if not self.audit.counts()["total"]:
+            QMessageBox.information(self, APP_NAME, "The audit trail is empty.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export the audit trail", "sentra_audit.csv", "CSV files (*.csv)")
+        if not path:
+            return
+        try:
+            self.audit.export_csv(path, getattr(self, "_audit_filter", ""))
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"Could not write {path}:\n{exc}")
+            return
+        self.audit.functionality("audit trail exported", path=path)
+        self._set_status(f"Exported the audit trail to {path}")
+        self._refresh_audit()
+
     def _refresh_logs(self) -> None:
         if self.pages.currentWidget() is not self.settings_view:
             return
+        self._refresh_audit()
         level = self.settings_view.level_box.currentText()
         self.settings_view.set_log_rows(
             [{"timestamp": entry.timestamp, "level": entry.level,
@@ -1276,6 +1430,8 @@ class MainWindow(QMainWindow):
         this window owns is waited for, not just the analysis one.
         """
         self._closing = True
+        self.audit.system("console closed", reports=len(self.rows),
+                          outstanding=self.outstanding_reviews)
         self.log_timer.stop()
         for worker in (self.worker, self.update_worker):
             if worker is not None and worker.isRunning():

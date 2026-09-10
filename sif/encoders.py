@@ -115,9 +115,11 @@ class TransformerEncoder(SemanticEncoder):
             from sentence_transformers import SentenceTransformer  # local import
 
             model = SentenceTransformer(self._model_name, device=self._device)
-            # The accessor was renamed in sentence-transformers 6; support both.
-            getter = getattr(model, "get_sentence_embedding_dimension", None) or \
-                getattr(model, "get_embedding_dimension")
+            # The accessor was renamed in sentence-transformers 6. Ask for the new
+            # name first: the old one still works but warns on every load, and a
+            # FutureWarning in an operator's console reads like a fault.
+            getter = getattr(model, "get_embedding_dimension", None) or \
+                getattr(model, "get_sentence_embedding_dimension")
             dimension = int(getter())
             self._model = model
             self.info = EncoderInfo(

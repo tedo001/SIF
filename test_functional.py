@@ -342,6 +342,58 @@ class TestBuildTwoWindowEndToEnd(unittest.TestCase):
         self.assertIn("sif_potential", rows[0])
         self.assertEqual(rows[0]["reference"], "NM-2601")
 
+    def test_a_corpus_imported_twice_stays_one_corpus(self) -> None:
+        """The whole CSV, twice - the second pass must replace, not duplicate."""
+        self._analyse_samples()
+        self.assertEqual(len(self.window.rows), 18)
+        first_references = [row["reference"] for row in self.window.rows]
+
+        self._analyse_samples()
+        self.assertEqual(len(self.window.rows), 18, "the corpus doubled")
+        self.assertEqual(self.window.duplicates_seen, 18)
+        self.assertEqual([row["reference"] for row in self.window.rows], first_references)
+        self.assertEqual(self.window.dashboard.tile_total._value.text(), "18")
+
+    def test_the_audit_trail_carries_the_session_end_to_end(self) -> None:
+        from sif.audit import FUNCTIONALITY, SYSTEM, AuditLog
+
+        self.window.audit = AuditLog(os.path.join(self.folder, "audit.jsonl"))
+        self._analyse_samples()
+        self.window.navigate("review")
+        self.window.review_view.select(0)
+        self.window.review_view._decide("confirmed")
+
+        actions = [entry.action for entry in self.window.audit.entries()]
+        self.assertIn("reports analysed", actions)
+        self.assertIn("review decision", actions)
+        analysed = next(entry for entry in self.window.audit.entries()
+                        if entry.action == "reports analysed")
+        self.assertEqual(analysed.category, FUNCTIONALITY)
+        self.assertEqual(analysed.detail.get("count"), 18)
+        self.assertEqual(self.window.audit.counts()[FUNCTIONALITY], len(actions)
+                         - sum(1 for entry in self.window.audit.entries()
+                               if entry.category == SYSTEM))
+
+        path = self.window.audit.export_csv(os.path.join(self.folder, "audit.csv"))
+        with open(path, encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), len(actions))
+
+    def test_every_language_sample_is_read_and_analysed(self) -> None:
+        """Tamil, Hindi and the rest reach a verdict rather than being dropped."""
+        folder = os.path.join(SAMPLES, "languages")
+        names = sorted(name for name in os.listdir(folder) if name.endswith(".txt"))
+        self.assertGreaterEqual(len(names), 6)
+        extractor = DocumentExtractor()
+        pipeline = SIFPipeline(backend="hashing")
+        for name in names:
+            document = extractor.extract(os.path.join(folder, name))
+            self.assertGreater(len(document.text), 200, name)
+            result = pipeline.analyze(document.text, reference=name)
+            self.assertTrue(result.iogp_rule, f"{name} produced no verdict")
+            self.assertTrue(result.needs_review,
+                            f"{name}: an untranslated report must reach a person")
+
     def test_the_log_view_shows_what_the_session_did(self) -> None:
         self._analyse_samples()
         self.window.navigate("settings")          # the log only refreshes when visible

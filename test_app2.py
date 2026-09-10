@@ -228,6 +228,89 @@ class TestOCRModelCache(unittest.TestCase):
         self.assertEqual(self.ocr._main(["--list"]), 0)
 
 
+class TestAuditTrail(unittest.TestCase):
+    """The record an auditor reads - separate from the debug log, and durable."""
+
+    def setUp(self) -> None:
+        from sif.audit import AuditLog
+
+        self.folder = tempfile.mkdtemp(prefix="sif-audit-")
+        self.log = AuditLog(os.path.join(self.folder, "audit.jsonl"), version="2.0.0")
+
+    def test_both_kinds_are_recorded_and_told_apart(self) -> None:
+        from sif.audit import FUNCTIONALITY, SYSTEM
+
+        self.log.system("console started", build="2")
+        self.log.functionality("reports analysed", count=18)
+        counts = self.log.counts()
+        self.assertEqual(counts, {"total": 2, SYSTEM: 1, FUNCTIONALITY: 1})
+        self.assertEqual([entry.action for entry in self.log.entries(FUNCTIONALITY)],
+                         ["reports analysed"])
+
+    def test_the_newest_entry_is_the_first_one_read_back(self) -> None:
+        self.log.system("first")
+        self.log.system("second")
+        self.assertEqual([entry.action for entry in self.log.entries()],
+                         ["second", "first"])
+
+    def test_an_entry_names_who_did_it(self) -> None:
+        self.log.reviewer = "D. Manikandan"
+        entry = self.log.functionality("review decision", reference="SEED-01")
+        self.assertTrue(entry.actor, "the operating-system user must be recorded")
+        self.assertEqual(entry.reviewer, "D. Manikandan")
+        self.assertEqual(entry.version, "2.0.0")
+        self.assertIn("SEED-01", entry.summary)
+
+    def test_the_trail_survives_a_restart(self) -> None:
+        from sif.audit import AuditLog
+
+        self.log.functionality("model trained", samples=200)
+        reopened = AuditLog(self.log.path)
+        self.assertEqual([entry.action for entry in reopened.entries()], ["model trained"])
+
+    def test_it_is_append_only_not_rewritten(self) -> None:
+        for index in range(5):
+            self.log.system("tick", index=index)
+        with open(self.log.path, encoding="utf-8") as handle:
+            lines = [line for line in handle if line.strip()]
+        self.assertEqual(len(lines), 5, "one line per entry, never rewritten")
+
+    def test_a_corrupt_line_costs_only_that_line(self) -> None:
+        self.log.system("good one")
+        with open(self.log.path, "a", encoding="utf-8") as handle:
+            handle.write("{ this is not json\n")
+        self.log.system("good two")
+        self.assertEqual([entry.action for entry in self.log.entries()],
+                         ["good two", "good one"])
+
+    def test_an_unwritable_location_is_reported_not_raised(self) -> None:
+        from sif.audit import AuditLog
+
+        log = AuditLog(os.path.join(self.folder, "\0", "audit.jsonl"))
+        log.system("console started")
+        self.assertFalse(log.writable)
+        self.assertEqual(len(log.entries()), 1, "it is still held for this session")
+
+    def test_export_writes_oldest_first_for_a_reader(self) -> None:
+        self.log.system("first")
+        self.log.functionality("second", count=1)
+        path = self.log.export_csv(os.path.join(self.folder, "audit.csv"))
+        with open(path, encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([row["action"] for row in rows], ["first", "second"])
+        self.assertIn("summary", rows[0])
+
+    def test_export_can_be_narrowed_to_one_kind(self) -> None:
+        from sif.audit import FUNCTIONALITY
+
+        self.log.system("first")
+        self.log.functionality("second", count=1)
+        path = self.log.export_csv(os.path.join(self.folder, "one.csv"), FUNCTIONALITY)
+        with open(path, encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([row["action"] for row in rows], ["second"])
+
+
 class TestOllamaEngine(unittest.TestCase):
     """The local LLM client, against a stand-in server."""
 
@@ -787,6 +870,61 @@ class TestReviewBench(unittest.TestCase):
         self.window.undo_decision()
         self.assertEqual(self.window.outstanding_reviews, 3)
         self.assertEqual(view.trail_table.rowCount(), 0)
+
+    def test_the_same_report_analysed_twice_is_one_report(self) -> None:
+        """Loading a corpus again must not double-count the incidents in it."""
+        before = len(self.window.rows)
+        repeat = dict(self.window.rows[0])
+        self.window.duplicates_seen = 0
+        self.window.on_row_ready(repeat)
+        self.assertEqual(len(self.window.rows), before, "a repeat replaced its row")
+        self.assertEqual(self.window.duplicates_seen, 1)
+        self.assertEqual(self.window.rows[0]["reference"], "R-1",
+                         "the repeat keeps the reference the corpus already knows")
+
+    def test_a_report_with_no_reference_is_given_one(self) -> None:
+        """An unreferenced row reaches the decision log as a hash nobody can look up."""
+        self.window.on_row_ready(
+            dict(reference="", raw_text="A wholly new narrative about a dropped load",
+                 sif_potential=False, risk_score=10.0, risk_band="Low",
+                 iogp_rule="Safe Mechanical Lifting", activity="lifting",
+                 location="yard", barrier_failure="none", energy_source="gravity",
+                 confidence=0.6))
+        self.assertEqual(self.window.rows[-1]["reference"], "REP-0004")
+
+    def test_the_audit_trail_records_what_the_operator_did(self) -> None:
+        from sif.audit import FUNCTIONALITY, SYSTEM
+
+        from sif.audit import AuditLog
+
+        self.window.audit = AuditLog(os.path.join(self.folder, "audit.jsonl"))
+        view = self.window.review_view
+        view.select(0)
+        view._decide("confirmed")
+        self.window.set_reviewer("D. Manikandan")
+
+        actions = [entry.action for entry in self.window.audit.entries()]
+        self.assertIn("review decision", actions)
+        self.assertIn("reviewer set", actions)
+        decision = next(entry for entry in self.window.audit.entries()
+                        if entry.action == "review decision")
+        self.assertEqual(decision.category, FUNCTIONALITY)
+        self.assertEqual(decision.detail.get("decision"), "confirmed")
+        self.assertEqual(
+            next(entry for entry in self.window.audit.entries()
+                 if entry.action == "reviewer set").category, SYSTEM)
+
+    def test_clearing_the_corpus_forgets_the_reports_not_the_decisions(self) -> None:
+        self.window.review_view.select(0)
+        self.window.review_view._decide("confirmed")
+        decided = self.window.decisions.counts()["decided"]
+
+        self.window.clear_corpus()
+        self.assertEqual(self.window.rows, [])
+        self.assertEqual(self.window.report_view.table.rowCount(), 0)
+        self.assertEqual(self.window.outstanding_reviews, 0)
+        self.assertEqual(self.window.decisions.counts()["decided"], decided,
+                         "decisions belong to the reports, not to the session")
 
     def test_the_header_counts_outstanding_work_not_decided_work(self) -> None:
         tile = self.window.dashboard.tile_review

@@ -1,8 +1,16 @@
-# SIF Insight Console
+# SENTRA
+
+*Sense the Risk · Stop the Incident*
+
+> Workers report near-misses every day. SENTRA reads each report the moment it is
+> written, finds the ones that could have killed someone, shows why, and asks a
+> person to confirm.
 
 Prototype for **Oil India Limited — Problem Statement 26165**: turning raw
 Unsafe Act / Unsafe Condition (UA/UC) and near-miss reports into structured,
 decision-grade **SIF (Serious Injury & Fatality) intelligence**.
+The engine is SENTRA; `sif/` remains the package name, and the settings folder
+keeps its old name so an existing operator's review decisions are not orphaned.
 
 ![Console](docs/screenshot.png)
 
@@ -206,6 +214,7 @@ git tag -a v2.1.0 -m "..." && git push origin v2.1.0
 | `sif/ocr.py` | `DocumentExtractor` — plain text, PDF text layer, PaddleOCR for scans; per-line OCR confidence. Also the model cache: one engine per language for the life of the process, a disk check so a downloaded model is never re-announced as pending, and `python -m sif.ocr` to fetch them once. |
 | `sif/mlops.py` | Features, `SIFModel` (XGBoost), `MLflowTracker`, `MLOpsService`. |
 | `sif/logging_setup.py` | Rotating file + in-memory ring buffer behind the Settings log view. |
+| `sif/audit.py` | The audit trail: append-only JSONL, `system` and `functionality` entries, CSV export. Separate from the log, because the log rotates away. |
 | `ui/` | `theme` (palette, style sheet, scroll-control assets), `charts` (painted bar/donut), `components`, `views`. |
 | `ui/assets/` | Scrollbar stepper arrows - Qt cannot draw a triangle reliably from a style sheet alone. |
 | `sif/lexical.py` | `LexicalEngine` — IOGP, energy, barrier, activity and location knowledge as patterns; the deterministic backbone. Holds the 5 seed narratives. |
@@ -240,6 +249,25 @@ problem statement asks for keep their names: `sif_potential`, `iogp_rule`,
 Every extractor degrades to an explicit fallback (`Unclassified / General HSE`,
 `Unspecified activity`, `Location not stated`, `No barrier failure identified`)
 rather than raising, so a malformed row never breaks a batch.
+
+## The audit trail
+
+Settings carries two records, and they are not the same thing.
+
+* **System logging** is diagnostics. Verbose, full of third-party chatter, and it
+  rotates away after a few megabytes - right for finding out why something failed
+  this morning, wrong for anything else.
+* **The audit trail** (`sif/audit.py`) is append-only JSONL beside the settings
+  file, one line per event, and nothing rotates it. **SYSTEM** entries are what
+  the software did by itself - started, attached a model, fetched OCR models,
+  checked for a release. **FUNCTIONALITY** entries are what an operator asked for
+  and what came back - reports analysed (with how many were repeats), documents
+  read, a model trained and on whose labels, every review decision, every export.
+
+Every entry carries the operating-system user, the reviewer name when one is set,
+the version, and its own detail. Filter by kind, and export to CSV for an
+auditor. If the location cannot be written the trail says **MEMORY ONLY** rather
+than letting anyone believe it reached disk.
 
 ## Scrolling
 

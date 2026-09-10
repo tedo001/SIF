@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build for the SIF Insight Console.
+"""PyInstaller build for SENTRA.
 
 Two variants, chosen with the ``SIF_BUILD_VARIANT`` environment variable:
 
@@ -20,7 +20,12 @@ import sys
 from PyInstaller.utils.hooks import collect_submodules
 
 VARIANT = os.environ.get("SIF_BUILD_VARIANT", "slim").lower()
-APP_NAME = "SIF Insight Console"
+APP_NAME = "SENTRA"
+#: The executable and one-folder bundle keep this stem. It is wired into
+#: installer.iss (AppExeName), the release workflow's tar step and the published
+#: asset names, so renaming it is a pipeline change rather than a label change -
+#: and the pipeline has never run yet. The name an operator sees is APP_NAME.
+EXECUTABLE = "SIFConsole"
 ENTRY = "app2.py"          # build 2 is the shipped interface
 
 hidden = [
@@ -66,7 +71,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="SIFConsole",
+    name=EXECUTABLE,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -81,7 +86,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="SIFConsole",
+    name=EXECUTABLE,
 )
 
 if sys.platform == "darwin":

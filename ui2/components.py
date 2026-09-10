@@ -142,7 +142,7 @@ class Sidebar(QFrame):
 
         name = QLabel("Oil India Limited")
         name.setObjectName("BrandName")
-        tagline = QLabel("SIF INSIGHT CONSOLE  ·  PS 26165")
+        tagline = QLabel("SENTRA  ·  PS 26165")
         tagline.setObjectName("BrandSub")
 
         text = QVBoxLayout()
