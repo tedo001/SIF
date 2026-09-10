@@ -12,6 +12,43 @@ one path through the console each.
 | `scanned_uauc_report.png` | **Add documents** (PaddleOCR) | A page with no text layer, so the OCR path has to run |
 | `multilingual_report.txt` | **Language / translation** | Five blocks in Hindi, Marathi, Tamil, Telugu and Kannada |
 | `languages/` | **One report per language** | Six full reports - Tamil, Hindi, Marathi, Telugu, Kannada, Urdu - each its own file, with its own README |
+| `training_corpus.csv` | **Training the model** | 56 labelled reports - 33 precursors, 23 controls. See below |
+
+## `training_corpus.csv` - labelled data for training
+
+The console trains on whatever review decisions you have made, which is correct
+but slow to bootstrap: a new machine has none. This file is a starting corpus,
+labelled in a `sif_label` column so the trainer can read it directly:
+
+```bash
+python train_model.py samples/training_corpus.csv --encoder hashing
+```
+
+The label column is found automatically. Every row was labelled from the safety
+logic - **high energy AND a failed barrier** - not from what the engine happens
+to output, and the set is built to be trained on honestly:
+
+* **33 precursors and 23 controls.** Each of the eleven IOGP rules carries both
+  a real failure and a counterfactual: the same incident with the barrier
+  *holding* (`*-N*`). Without those, a recall score means nothing.
+* **Five reports with no high-energy source at all**, including a housekeeping
+  spill and a collapsed canteen chair reported as a near miss. Severity wording
+  alone must never create a flag.
+* **Minimising wording on both sides.** `MX-T01` downplays a live 11 kV feeder
+  with no isolation ("business as usual"); `GN-N05` uses the same dismissive
+  tone about an isolation that genuinely held. Tone is not evidence.
+* **No overlap with `evaluation/labelled_reports.csv`.** That set measures the
+  engine, this one trains the model, and a test enforces the separation -
+  training on the set that scores you turns every number into a fiction.
+
+Building it found three barrier phrasings the vocabulary could not read: a
+component named before its lapse ("the toe board was missing"), a quantifier
+inside a negation ("without any isolation") and a gerund ("without gas
+testing"). All three now parse, and `TestTrainingCorpus` pins them by name.
+
+**It is still synthetic.** It is a bootstrap that gets a model off the ground on
+day one, not a substitute for your own corpus. Replace it with real reports and
+real reviewed decisions as soon as you have them.
 
 ## Working through them
 

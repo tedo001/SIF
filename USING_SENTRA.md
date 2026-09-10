@@ -31,6 +31,12 @@ working?" before you have to ask.
 | --- | --- | --- | --- |
 | 1 | **Download / verify models** (workflow card 2) — the same control on the Engines page reads **Download / verify OCR models (once)** | Workflow card 2, or Engines page | Card 2 reads `PaddleOCR ready — models are on this machine … No download needed` |
 | 2 | **Start Ollama and pull a model**, then press **Check Ollama** on card 3 | A terminal: `ollama pull llama3.2` | Card 3 reads `Ollama ready — llama3.2` |
+
+> **Card 3 green means translation will actually run.** It checks that the
+> server answers *and* that the model you configured is pulled — a server that
+> is up with the wrong model reads amber, not green, because it would accept a
+> translation request and fail it silently. If you pulled a different model,
+> put its exact name (from `ollama list`) into Engines → **Model** → **Apply**.
 | 3 | **Check the encoder** | Engines page | Header reads `encoder: transformer` (or `hashing`, which works offline) |
 | 4 | **Put your name in** | Human review → **Reviewer** box | Your name appears on every decision and audit entry |
 
@@ -201,6 +207,18 @@ The status line tells you which labels it used, and the difference matters:
 - **`on N pipeline verdict(s)`** — not enough human labels yet, so it learned to
   reproduce the rules. Useful for speed; it adds no knowledge.
 
+**No decisions yet, and want a model today?** There is a labelled starting
+corpus in `samples/training_corpus.csv` — 56 reports, 33 precursors and 23
+controls, labelled from the safety logic rather than from the engine's output:
+
+```bash
+python train_model.py samples/training_corpus.csv --encoder hashing
+```
+
+It is synthetic, so treat it as a bootstrap: it gets a model off the ground on
+day one and is worth exactly nothing compared with your own reviewed decisions.
+Retrain on those as soon as the queue has produced them.
+
 Metrics land on the **Analytics** page with the feature importances — in safety
 language, not `f37`. The run is logged to MLflow, so you can compare this model
 against the last one and answer "which model was live, and what had it seen?"
@@ -243,8 +261,8 @@ then export.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Card 2 keeps saying models download | Cache empty, or `PADDLE_PDX_CACHE_HOME` moved | `python -m sif.ocr --list`, then `python -m sif.ocr en` |
-| Card 3 red, `not pulled` | Ollama running but the model is missing | `ollama pull llama3.2`, or point Engines at the model you have |
-| Report shows a red NOT TRANSLATED bar | Analysed before Ollama was up | Start Ollama, re-analyse the document |
+| Card 3 red, `not pulled` | Ollama running but the model is missing | Run `ollama list` to see what you actually have, then type that exact name into Engines → **Model** and press **Apply** |
+| Report shows a red NOT TRANSLATED bar | Analysed while Ollama was down, or with a model that was not pulled | Get card 3 green first, then **re-analyse the document** - translation happens at analysis time and is not applied retrospectively |
 | A report you expected to flag did not | The barrier phrasing may not be in the vocabulary | It still reaches the queue — confirm it there, and the label teaches the model |
 | Corpus counts look doubled | Older builds appended repeats | Fixed; **File → Clear the corpus** and re-import to reset |
 | `encoder: hashing` when you wanted the transformer | No network, or the model is not cached | Engines → Semantic encoder → *Transformer*, then re-analyse |

@@ -171,13 +171,45 @@ class OllamaEngine:
         return [str(item.get("name", "")) for item in body.get("models", [])
                 if item.get("name")]
 
+    @staticmethod
+    def _same_model(wanted: str, installed: str) -> bool:
+        """True when two Ollama model names refer to the same model.
+
+        Ollama stores an untagged pull under the ``:latest`` tag, so a server
+        that has ``llama3.2`` reports it as ``llama3.2:latest``. Comparing the
+        two by equality says "not pulled" about a model that is sitting right
+        there, which sends an operator off to re-pull something they already
+        have while translation keeps failing for the real reason.
+        """
+        def stem(name: str) -> str:
+            name = name.strip().lower()
+            return name[:-len(":latest")] if name.endswith(":latest") else name
+
+        return stem(wanted) == stem(installed)
+
+    def has_model(self) -> bool:
+        """True when the configured model is actually pulled on the server."""
+        return any(self._same_model(self.model, name) for name in self.models())
+
+    def ready(self) -> bool:
+        """True when this engine can actually do work.
+
+        Deliberately stricter than :meth:`available`: a server that answers but
+        has not pulled the configured model will accept a request and fail it.
+        Anything that gates real work - translating a narrative before analysis,
+        the green light on the workflow map - must ask this rather than
+        ``available()``, or the interface promises a translation the engine
+        cannot perform and the report is filed as though it were read.
+        """
+        return self.available() and self.has_model()
+
     def status(self) -> str:
         """One line for the interface."""
         if not self.available():
             return (f"Ollama not reachable at {self.host} - the console runs without it "
                     f"({self.last_error})")
         installed = self.models()
-        if self.model not in installed:
+        if not self.has_model():
             return (f"Ollama up at {self.host}, but '{self.model}' is not pulled. "
                     f"Run: ollama pull {self.model}"
                     + (f"  (available: {', '.join(installed[:4])})" if installed else ""))

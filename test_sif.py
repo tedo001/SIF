@@ -1122,5 +1122,70 @@ class TestEngineQuality(unittest.TestCase):
                                 "without negative controls, recall can be faked")
 
 
+class TestTrainingCorpus(unittest.TestCase):
+    """The training set in ``samples/training_corpus.csv``, scored as a second floor.
+
+    It is deliberately separate from ``evaluation/labelled_reports.csv``: one set
+    trains the model, the other measures the engine, and letting the two overlap
+    would make every score a report on data the model had already seen. Building
+    this set is what exposed three barrier phrasings the vocabulary could not
+    read - a component named before its lapse ("the toe board was missing"), a
+    quantifier inside a negation ("without any isolation") and a gerund
+    ("without gas testing") - so those three are pinned here by name.
+    """
+
+    CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "samples", "training_corpus.csv")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import csv
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "evaluation"))
+        with open(cls.CORPUS, encoding="utf-8-sig", newline="") as handle:
+            cls.rows = list(csv.DictReader(handle))
+        pipeline = offline_pipeline()
+        cls.results = {row["report_id"]: pipeline.analyze(row["report"],
+                                                          reference=row["report_id"])
+                       for row in cls.rows}
+
+    def _label(self, row) -> bool:
+        return row["sif_label"].strip() == "1"
+
+    def test_every_labelled_precursor_is_found(self) -> None:
+        missed = [row["report_id"] for row in self.rows
+                  if self._label(row) and not self.results[row["report_id"]].sif_potential]
+        self.assertEqual(missed, [], f"precursors the engine no longer reads: {missed}")
+
+    def test_no_negative_control_flags(self) -> None:
+        flagged = [row["report_id"] for row in self.rows
+                   if not self._label(row) and self.results[row["report_id"]].sif_potential]
+        self.assertEqual(flagged, [], f"controls that wrongly flagged: {flagged}")
+
+    def test_the_three_phrasings_this_set_exposed_stay_readable(self) -> None:
+        """Reversed word order, a quantifier in the negation, and a gerund."""
+        for reference in ("WH-T03", "MX-T01", "MX-T02"):
+            with self.subTest(reference=reference):
+                self.assertTrue(self.results[reference].barrier_failed,
+                                f"{reference}: the barrier lapse became unreadable again")
+
+    def test_it_is_usable_as_training_data(self) -> None:
+        """Both verdicts present in quantity, or the model learns one answer."""
+        positives = sum(1 for row in self.rows if self._label(row))
+        self.assertGreaterEqual(len(self.rows), 50)
+        self.assertGreaterEqual(positives, 20)
+        self.assertGreaterEqual(len(self.rows) - positives, 20)
+
+    def test_it_does_not_overlap_the_evaluation_set(self) -> None:
+        """Training on the set that measures you turns every score into a fiction."""
+        from evaluate import load
+
+        evaluation = {case.report.strip().lower() for case in load()}
+        overlap = [row["report_id"] for row in self.rows
+                   if row["report"].strip().lower() in evaluation]
+        self.assertEqual(overlap, [], f"these rows appear in both sets: {overlap}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

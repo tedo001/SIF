@@ -359,13 +359,18 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
         r"pipe|ladder|rail|cable tray|process line)\b",
         r"\binstead of (?:the |an? )?(?:anchor|anchorage|certified|approved)\w*\b",
         r"\bmissing (?:toe\s?board|mid\s?rail|top rail|guard)\b",
+        # The same lapse with the component named first: a report writes either
+        # "missing toe board" or "the toe board was missing", and only one of
+        # those was recognised.
+        r"\b(?:toe\s?board|mid\s?rail|top rail|ladder|scaffold|platform) "
+        r"(?:was |were )?(?:missing|unsecured|not secured)\b",
         r"\b(?:toe\s?board|mid\s?rail|hand\s?rail|ladder) (?:was |were )?not "
         r"(?:tied|fitted|secured|in place)\b",
         r"\bscaffold (?:tag|inspection) (?:had )?(?:expired|lapsed|out of date)\b",
         r"\bsecondary (?:hook|lanyard) (?:was )?missing\b",
     )),
     BarrierSignature("Energy isolation / LOTO not applied or verified", (
-        r"\b(?:with)?out (?:loto|lock\s?out|isolation|a permit)\b",
+        r"\b(?:with)?out (?:any |the |proper )?(?:loto|lock\s?out|isolation|a permit)\b",
         r"\b(?:no|not) (?:locked|tagged) out\b",
         r"\bloto (?:not (?:applied|verified)|missing|bypassed|removed)\b",
         r"\b(?:not|never|un)\s?(?:de[\s-]?energi[sz]ed|isolated|earthed|grounded)\b",
@@ -411,7 +416,8 @@ CRITICAL_BARRIERS: Tuple[BarrierSignature, ...] = (
     BarrierSignature("Gas testing / ventilation / atmospheric control missing", (
         r"\bno gas (?:test|testing|detector|monitor)\b",
         r"\bgas test(?:ing)? (?:was )?not (?:done|carried out|performed|repeated)\b",
-        r"\b(?:with)?out (?:gas test|forced ventilation|scba|breathing apparatus)\b",
+        r"\b(?:with)?out (?:any |proper )?(?:gas test(?:ing)?|forced ventilation|"
+        r"ventilation|scba|breathing apparatus)\b",
         r"\bventilation (?:was )?(?:not|in)(?:adequate|stalled|provided| available)?\b",
         r"\bno (?:hole watch|standby ?man|attendant|rescue plan)\b",
         r"\bgas detector (?:bypassed|disabled|isolated|not calibrated)\b",

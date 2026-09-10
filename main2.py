@@ -888,7 +888,10 @@ class MainWindow(QMainWindow):
     def check_llm(self) -> None:
         """Probe the Ollama host."""
         def probe():
-            return self.llm.available(), self.llm.status()
+            # ready(), not available(): a reachable server with the model
+            # missing would otherwise light the map green and then fail every
+            # translation silently at analysis time.
+            return self.llm.ready(), self.llm.status()
 
         self.engines_view.set_llm_status("Checking the local LLM host")
         self._start(ProbeWorker("Ollama", probe, parent=self), "Checking Ollama")

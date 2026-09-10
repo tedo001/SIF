@@ -338,6 +338,28 @@ class TestOllamaEngine(unittest.TestCase):
         self.assertIn("not pulled", status)
         self.assertIn("ollama pull not-pulled", status)
 
+    def test_an_untagged_name_matches_the_latest_tag(self) -> None:
+        """`ollama pull llama3.2` is stored as `llama3.2:latest`.
+
+        Reading that as "not pulled" sends an operator to re-pull a model they
+        already have, while the real reason translation failed goes unfound.
+        """
+        engine = self.engine("llama3.2")
+        self.assertTrue(engine.has_model())
+        self.assertTrue(engine.ready())
+        self.assertIn("ready", engine.status())
+
+    def test_ready_is_false_when_the_model_is_missing(self) -> None:
+        """A server that answers is not the same as a server that can work."""
+        engine = self.engine("not-pulled")
+        self.assertTrue(engine.available(), "the stand-in server is up")
+        self.assertFalse(engine.has_model())
+        self.assertFalse(engine.ready(),
+                         "a reachable host with no model must not read as ready")
+
+    def test_ready_is_false_when_the_host_is_unreachable(self) -> None:
+        self.assertFalse(OllamaEngine(host="http://127.0.0.1:9", model="llama3.2").ready())
+
     def test_analysis_returns_a_structured_opinion(self) -> None:
         opinion = self.engine().analyze("Worker on the scaffold, lanyard not anchored.")
         self.assertTrue(opinion.ok)
