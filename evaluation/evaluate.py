@@ -129,6 +129,12 @@ def score(outcomes: Sequence[Outcome]) -> Dict[str, float]:
         "reviewed": sum(1 for item in outcomes if item.queued),
         "missed_and_unqueued": sum(1 for item in outcomes
                                    if item.kind == "MISS" and not item.queued),
+        # Independent of the label: any report the engine itself calls
+        # SIF-potential must reach a person. This is the review queue's own
+        # contract, checked against what it actually did - not against whether
+        # the call happened to be right.
+        "confirmed_unqueued": sum(1 for item in outcomes
+                                  if item.predicted_sif and not item.queued),
     }
 
 
@@ -152,6 +158,8 @@ def report(outcomes: Sequence[Outcome], show_errors: bool = False) -> Dict[str, 
     print(f"  queued for a human    {numbers['reviewed']}")
     print(f"  missed AND unqueued   {numbers['missed_and_unqueued']}   "
           f"<- the only truly silent failures")
+    print(f"  confirmed, unqueued   {numbers['confirmed_unqueued']}   "
+          f"<- must always be 0: a flag the engine raised and nobody saw")
 
     if show_errors:
         for item in outcomes:

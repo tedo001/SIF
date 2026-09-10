@@ -6,7 +6,7 @@ one path through the console each.
 
 | File | Path it exercises | What to expect |
 | --- | --- | --- |
-| `near_miss_reports.csv` | **Import CSV of reports** | 18 reports; 13 flag SIF potential and 16 reach the review queue |
+| `near_miss_reports.csv` | **Import CSV of reports** | 18 reports; 13 flag SIF potential and all 18 reach the review queue |
 | `shift_log.txt` | **Add documents** (text) | One night-shift log; splits into 6 blocks, 5 of them analysable |
 | `permit_observation.pdf` | **Add documents** (PDF text layer) | Read without OCR by `pypdfium2`; analyses as SIF potential, risk 80.7, Work Authorisation |
 | `scanned_uauc_report.png` | **Add documents** (PaddleOCR) | A page with no text layer, so the OCR path has to run |
@@ -25,16 +25,21 @@ one path through the console each.
    | --- | --- | --- |
    | Critical risk | 11 | Scored in the top band; verify before it drives an intervention |
    | Thin evidence | 5 | Short or vague narratives - the engine says so rather than guessing |
+   | SIF potential | 2 | Confirmed fatal potential outside the Critical band (High band here) - never closed without a person, whatever the band |
 
-   The five low-consequence reports (NM-2609 to NM-2613: a loose plate, a canteen
-   spill, back strain, and two deliberately terse ones) do not flag. That is the
-   correct answer for them.
+   All 18 reports reach the queue: the five low-consequence ones (NM-2609 to
+   NM-2613: a loose plate, a canteen spill, back strain, and two deliberately
+   terse ones) as Thin evidence, and every one of the 13 confirmed findings by
+   one trigger or another - that is deliberate, not a bug: nothing the engine
+   calls SIF-potential is ever filed away unseen.
 
-   These counts moved once already: before the barrier-vocabulary work of
+   These counts moved twice. Before the barrier-vocabulary work of
    `evaluation/`, only 5 of the 18 flagged and five more reached the queue as
-   "Energy, no barrier" - high energy, rule matched, no barrier recognised. They
-   now carry a named barrier and arrive as findings instead. Re-measure with
-   `python evaluation/evaluate.py` after any change to the knowledge base.
+   "Energy, no barrier" - high energy, rule matched, no barrier recognised; they
+   now carry a named barrier and arrive as findings instead. Then two confirmed
+   findings in the High band (NM-2608, NM-2614) were found to reach nobody at
+   all - a real gap, closed by the "SIF potential" catch-all trigger. Re-measure
+   with `python evaluation/evaluate.py` after any change to the knowledge base.
 
    Decide each with `1`, `2` or `3`. The bench advances by itself, decisions are
    written to disk as you go, and the trail tab keeps every one of them.

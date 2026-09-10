@@ -18,6 +18,7 @@ Typical use::
 
 from .encoders import DEFAULT_MODEL, HashingEncoder, TransformerEncoder, load_encoder
 from .lexical import SEED_REPORTS, LexicalEngine, SIFEngine
+from .narrative import corpus_bulletin, report_brief
 from .patterns import Hotspot, PatternDetector
 from .pipeline import Intelligence, PipelineResult, SIFPipeline
 from .review import ReviewItem, ReviewQueue
@@ -30,5 +31,5 @@ __all__ = [
     "LexicalEngine", "SIFEngine", "SEED_REPORTS",
     "TransformerEncoder", "HashingEncoder", "load_encoder", "DEFAULT_MODEL",
     "PatternDetector", "Hotspot", "ReviewQueue", "ReviewItem",
-    "RiskScorer", "RiskScore", "__version__",
+    "RiskScorer", "RiskScore", "report_brief", "corpus_bulletin", "__version__",
 ]

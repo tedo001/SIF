@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
 
 from main import read_csv_reports
 from sif import SEED_REPORTS, SIFPipeline
+from sif.narrative import corpus_bulletin
 from sif.llm import OllamaEngine, looks_non_latin
 from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
                                log_file_path, set_level)
@@ -507,6 +508,7 @@ class MainWindow(QMainWindow):
             ("&Import CSV export...", "Ctrl+O", self.import_csv),
             ("Add &documents...", "Ctrl+D", self.add_documents),
             ("&Export results CSV...", "Ctrl+S", self.export_csv),
+            ("Generate &safety bulletin...", "Ctrl+B", self.generate_bulletin),
             ("Export the &audit trail...", "", self.export_audit),
             ("&Clear the corpus", "", self.confirm_clear_corpus),
         ):
@@ -745,6 +747,42 @@ class MainWindow(QMainWindow):
         LOGGER.info("Exported %d rows to %s", len(self.rows), path)
         self.audit.functionality("corpus exported", rows=len(self.rows), path=path)
         self._set_status(f"Exported {len(self.rows)} rows to {path}")
+
+    def generate_bulletin(self) -> None:
+        """Write an auto-generated safety bulletin over the analysed corpus.
+
+        Deliberately templated from the same structured fields the dashboard
+        renders, not sent through the local LLM: a circulated safety document
+        is the wrong place for a model to improvise, and every line here has to
+        trace back to a report the way everything else in this console does.
+        """
+        if not self.rows:
+            QMessageBox.information(self, APP_NAME,
+                                    "Analyse some reports first - there is nothing to "
+                                    "summarise yet.")
+            return
+        results = self._as_results()
+        intelligence = self.pipeline.aggregate(results)
+        bulletin = corpus_bulletin(
+            intelligence, results,
+            period=datetime.now().strftime("Generated from the console, %Y-%m-%d"))
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Generate safety bulletin",
+            os.path.join(os.getcwd(), "sentra_bulletin.txt"), "Text files (*.txt)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(bulletin)
+        except OSError as exc:
+            QMessageBox.critical(self, APP_NAME, f"Could not write the file:\n{exc}")
+            return
+        LOGGER.info("Generated a safety bulletin over %d report(s) to %s",
+                    len(self.rows), path)
+        self.audit.functionality("safety bulletin generated", reports=len(self.rows),
+                                 path=path)
+        self._set_status(f"Safety bulletin written to {path}")
 
     def confirm_clear_corpus(self) -> None:
         """Ask before dropping the corpus - it cannot be undone from here."""

@@ -68,6 +68,10 @@ class PipelineResult:
     lexical_flag: bool = False
     semantic_flag: bool = False
     semantic_active: bool = False
+    #: The narrative's own wording downplays what it describes ("nothing
+    #: serious"), independent of the facts the engine extracted. See
+    #: :attr:`sif.lexical.SIFAssessment.minimizing_language`.
+    minimizing_language: bool = False
     ml_probability: Optional[float] = None
     ml_flag: bool = False
     ml_active: bool = False
@@ -261,6 +265,7 @@ class SIFPipeline:
             lexical_flag=sif.lexical_flag,
             semantic_flag=sif.semantic_flag,
             semantic_active=sif.semantic_active,
+            minimizing_language=lexical.minimizing_language,
             explanation=evidence.explanation,
             reference=reference,
             encoder=self.encoder.info.label(),

@@ -640,6 +640,25 @@ _LOW_SEVERITY_MARKERS = _compile((
     r"\bno injury\b", r"\bslight\b", r"\bsuperficial\b",
 ))
 
+#: Dismissive framing, independent of the facts in the same sentence. Distinct
+#: from ``_LOW_SEVERITY_MARKERS``: those describe an objectively small outcome
+#: ("first aid", "cosmetic"); these describe how the report *talks about*
+#: whatever it describes, regardless of what that turns out to be. A narrative
+#: can say "nothing serious" about a live 11 kV cable with no LOTO applied -
+#: the facts still give it fatal potential, and a reviewer skimming for
+#: alarming language is exactly who misses that. See :attr:`SIFAssessment.
+#: minimizing_language`.
+_MINIMIZING_LANGUAGE = _compile((
+    r"\bnothing serious\b", r"\bno (?:big|real) (?:deal|issue|risk)\b",
+    r"\bnot a (?:big deal|major issue|serious issue)\b",
+    r"\b(?:just|only) (?:a|the) (?:small|little|routine)\b",
+    r"\bno cause for concern\b", r"\bnothing to worry about\b",
+    r"\bbusiness as usual\b", r"\ball in a day'?s work\b",
+    r"\bno real (?:danger|hazard)\b", r"\bshouldn'?t be an? issue\b",
+    r"\bwasn'?t (?:really )?a problem\b", r"\bisn'?t (?:really )?a problem\b",
+    r"\bnothing (?:to|worth) report(?:ing)?\b", r"\bnot worth (?:a )?mention(?:ing)?\b",
+))
+
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -666,6 +685,10 @@ class SIFAssessment:
     barrier_failed: bool = False
     confidence: float = 0.0
     severity_hint: str = "Low"
+    #: True when the narrative's own wording downplays what it describes
+    #: ("nothing serious", "no big deal") - independent of ``sif_potential``,
+    #: so it is visible even on reports the facts alone did not flag.
+    minimizing_language: bool = False
     evidence: List[str] = field(default_factory=list)
     raw_text: str = ""
 
@@ -757,6 +780,7 @@ class LexicalEngine:
         rule, rule_score = self._match_rule(clean, evidence)
         energy_label, energy_hits = self._match_energy(clean, evidence)
         barrier_label, barrier_hits = self._match_barrier(clean, evidence)
+        minimizing_language = self._match_minimizing(clean, evidence)
 
         # A rule whose own semantics imply high energy (e.g. Working at Height)
         # counts as an energy source even when the narrative is terse.
@@ -783,6 +807,7 @@ class LexicalEngine:
             barrier_failed=barrier_failed,
             confidence=confidence,
             severity_hint=severity,
+            minimizing_language=minimizing_language,
             evidence=evidence,
             raw_text=text.strip() if isinstance(text, str) else "",
         )
@@ -854,6 +879,15 @@ class LexicalEngine:
             return NO_ENERGY, []
         evidence.append("energy cues: " + ", ".join(_distinct_cues(hits)))
         return " + ".join(dict.fromkeys(labels)), hits
+
+    def _match_minimizing(self, clean: str, evidence: List[str]) -> bool:
+        """Detect dismissive framing; records the matched phrase as a cue."""
+        hits = [m.group(0) for pattern in _MINIMIZING_LANGUAGE
+                for m in [pattern.search(clean)] if m]
+        if not hits:
+            return False
+        evidence.append("minimizing language: " + ", ".join(_distinct_cues(hits)))
+        return True
 
     def _match_barrier(self, clean: str, evidence: List[str]) -> Tuple[str, List[str]]:
         """Detect failed critical barriers; returns (label, matched phrases)."""

@@ -354,6 +354,32 @@ class TestBuildTwoWindowEndToEnd(unittest.TestCase):
         self.assertIn("sif_potential", rows[0])
         self.assertEqual(rows[0]["reference"], "NM-2601")
 
+    def test_generating_a_bulletin_writes_a_traceable_document(self) -> None:
+        """The auto-written bulletin over the real corpus, exercised end to end."""
+        self._analyse_samples()
+        path = os.path.join(self.folder, "bulletin.txt")
+        original = self.main2.QFileDialog.getSaveFileName
+        self.main2.QFileDialog.getSaveFileName = lambda *args, **kw: (path, "")
+        try:
+            self.window.generate_bulletin()
+        finally:
+            self.main2.QFileDialog.getSaveFileName = original
+
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("Safety Intelligence Bulletin", text)
+        self.assertIn("18 report(s) analysed", text)
+        self.assertIn("WHAT IS DRIVING RISK", text)
+        self.assertIn("NEEDS ATTENTION NOW", text)
+        # Every reference the bulletin names must be a report that was actually
+        # analysed - a generated document is worthless if it cites nothing real.
+        references = {row["reference"] for row in self.window.rows}
+        cited = {line.split()[1] for line in text.splitlines()
+                 if line.startswith("- ") and line.split()[1] in references}
+        self.assertTrue(cited, "the bulletin named no real report references")
+        self.assertTrue(cited.issubset(references))
+        self.assertIn("Prototype output", text)
+
     def test_a_corpus_imported_twice_stays_one_corpus(self) -> None:
         """The whole CSV, twice - the second pass must replace, not duplicate."""
         self._analyse_samples()

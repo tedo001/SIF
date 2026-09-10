@@ -22,6 +22,16 @@ Four triggers, in priority order:
    Either the barrier genuinely held, which a person can confirm in seconds, or it
    failed in words the vocabulary does not yet carry - and that is exactly the
    report worth having.
+6. **SIF potential, any other reason** - a catch-all. Every trigger above is a
+   specific reason a report needs a person; this one is the guarantee behind all
+   of them: no report the engine confirms as SIF-potential is ever closed
+   without one. A confirmed finding outside the Critical risk band (High or
+   Medium, with clean extraction and no disagreement) used to fall through every
+   check above and reach nobody - exactly the silent failure this module's own
+   contract rules out. If the report's own wording downplays the finding
+   ("nothing serious", "no big deal"), the reason says so: the engine reads the
+   extracted facts, not the tone, and a reviewer skimming for alarming language
+   is precisely who misses that.
 
 When a trained XGBoost model is attached (see :mod:`sif.mlops`), its verdict is a
 third opinion: where it contradicts the pipeline, the report is queued as a
@@ -59,7 +69,7 @@ LOGGER = logging.getLogger(__name__)
 
 PRIORITY_ORDER = {"Disagreement": 0, "Model disagreement": 1, "LLM disagreement": 2,
                   "Critical risk": 3, "Thin evidence": 4, "Unclassified exposure": 5,
-                  "Energy, no barrier": 6}
+                  "Energy, no barrier": 6, "SIF potential": 7}
 
 
 @dataclass
@@ -140,7 +150,8 @@ class ReviewQueue:
                 + (f" - {result.llm_rationale}" if result.llm_rationale else ""))
         if result.risk_band == ReviewQueue.CRITICAL_BAND:
             return "Critical risk", (
-                f"risk {result.risk_score:.0f}/100 - verify before it drives an intervention")
+                f"risk {result.risk_score:.0f}/100 - verify before it drives an intervention"
+                + ReviewQueue._minimizing_note(result))
         if result.confidence < ReviewQueue.CONFIDENCE_FLOOR:
             return "Thin evidence", (
                 f"extraction confidence {result.confidence:.2f} - narrative may be too "
@@ -154,7 +165,30 @@ class ReviewQueue:
                 f"{result.energy_source or 'a high-energy source'} was recognised under "
                 f"{result.iogp_rule}, but no failed barrier was - confirm the barrier "
                 "held, or name the one that did not")
+        if result.sif_potential:
+            # The catch-all: every confirmed finding reaches a person, even one
+            # that is High or Medium band with clean extraction and no
+            # disagreement - the combination none of the checks above catch.
+            return "SIF potential", (
+                f"engine confirms fatal potential at risk {result.risk_score:.0f}/100 "
+                f"(band {result.risk_band}) under {result.iogp_rule} - verify before "
+                "it is filed away" + ReviewQueue._minimizing_note(result))
         return None, ""
+
+    @staticmethod
+    def _minimizing_note(result: "PipelineResult") -> str:
+        """Appended to a reason when the report's own wording undersells it.
+
+        The engine scores energy x barrier, not tone, so a report can read
+        "nothing serious, no injury" while describing a live cable with no
+        LOTO applied. Naming that explicitly is the point: a reviewer skimming
+        for alarming language is exactly who would otherwise miss it.
+        """
+        if not getattr(result, "minimizing_language", False):
+            return ""
+        return (" - note: the report's own wording downplays this "
+                "('minor', 'nothing serious' or similar); the finding rests on "
+                "the extracted facts, not the tone")
 
 
 # ---------------------------------------------------------------------------

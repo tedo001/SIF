@@ -762,6 +762,86 @@ class TestEnergyWithoutBarrierTrigger(unittest.TestCase):
         self.assertIsNone(ReviewQueue.classify(result)[0])
 
 
+class TestConfirmedFindingsAlwaysReachAPerson(unittest.TestCase):
+    """No sif_potential result may ever return (None, "") from classify().
+
+    Every trigger above catches a specific reason; this is the guarantee behind
+    all of them. Before this trigger existed, a confirmed finding in the High or
+    Medium risk band, with clean extraction and no rule/model/LLM disagreement,
+    matched none of the specific checks and fell through silently - the exact
+    failure the module's own docstring rules out.
+    """
+
+    def test_a_high_band_confirmed_finding_is_queued(self) -> None:
+        result = _result("NM-6", "No test for dead was carried out before the guard work began",
+                         sif_potential=True, high_energy=True, barrier_failed=True,
+                         confidence=0.8, risk_band="High", risk_score=65.0)
+        trigger, reason = ReviewQueue.classify(result)
+        self.assertEqual(trigger, "SIF potential")
+        self.assertIn("65", reason)
+        self.assertIn("High", reason)
+
+    def test_a_medium_band_confirmed_finding_is_queued(self) -> None:
+        result = _result("NM-7", "The banksman left the lift to attend another job",
+                         sif_potential=True, high_energy=True, barrier_failed=True,
+                         confidence=0.8, risk_band="Medium", risk_score=45.0)
+        self.assertEqual(ReviewQueue.classify(result)[0], "SIF potential")
+
+    def test_critical_band_still_wins_on_specificity(self) -> None:
+        """The catch-all never shadows a more specific, higher-priority trigger."""
+        result = _result("NM-8", "No LOTO applied to the live feeder", sif_potential=True,
+                         high_energy=True, barrier_failed=True, risk_band="Critical")
+        self.assertEqual(ReviewQueue.classify(result)[0], "Critical risk")
+
+    def test_no_sif_potential_result_is_ever_left_unqueued(self) -> None:
+        """Property check across every risk band, with and without extras active."""
+        for band in ("Critical", "High", "Medium", "Low"):
+            result = _result(f"NM-{band}", "text", sif_potential=True, high_energy=True,
+                             barrier_failed=True, confidence=0.8, risk_band=band)
+            trigger, _reason = ReviewQueue.classify(result)
+            self.assertIsNotNone(trigger, f"band {band} was not queued")
+
+
+class TestMinimizingLanguage(unittest.TestCase):
+    """Facts, not tone - and the engine names it when the two disagree."""
+
+    def test_dismissive_wording_does_not_suppress_a_real_finding(self) -> None:
+        from sif import SIFPipeline
+
+        pipeline = SIFPipeline(backend="hashing")
+        result = pipeline.analyze(
+            "Nothing serious - the 11 kV feeder cable was left ungrounded and no LOTO "
+            "was applied, but it's not a big deal.")
+        self.assertTrue(result.sif_potential)
+        self.assertTrue(result.minimizing_language)
+        self.assertIn("minimizing language", " ".join(result.evidence.get("lexical_cues", [])))
+
+    def test_the_review_reason_names_the_mismatch(self) -> None:
+        result = _result("NM-9", "Nothing serious happened", sif_potential=True,
+                         high_energy=True, barrier_failed=True, risk_band="Critical",
+                         minimizing_language=True)
+        _trigger, reason = ReviewQueue.classify(result)
+        self.assertIn("downplays", reason)
+
+    def test_the_note_is_silent_when_there_is_nothing_to_flag(self) -> None:
+        result = _result("NM-10", "No LOTO was applied to the live feeder", sif_potential=True,
+                         high_energy=True, barrier_failed=True, risk_band="Critical",
+                         minimizing_language=False)
+        _trigger, reason = ReviewQueue.classify(result)
+        self.assertNotIn("downplays", reason)
+
+    def test_dismissive_wording_alone_does_not_manufacture_a_finding(self) -> None:
+        """The flag is informational - it never substitutes for energy x barrier."""
+        from sif import SIFPipeline
+
+        pipeline = SIFPipeline(backend="hashing")
+        result = pipeline.analyze(
+            "Nothing serious - a tap in the wash room was dripping and has been "
+            "reported to the maintenance desk.")
+        self.assertTrue(result.minimizing_language)
+        self.assertFalse(result.sif_potential)
+
+
 class TestSampleReports(unittest.TestCase):
     """The bundled test material must actually exercise what it claims to."""
 

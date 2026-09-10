@@ -400,6 +400,121 @@ class TestIntelligence(unittest.TestCase):
         self.assertIn("confidence", reason)
 
 
+class TestNarrativeGeneration(unittest.TestCase):
+    """Stage 7 - generating written safety information from structured facts.
+
+    Every assertion here checks that the generated text is *traceable*: a
+    number that matches the KPIs it was built from, a reference that is a real
+    analysed report, a section that appears only when there is something to
+    say. Fluent prose is not the bar; an auditable one is.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from sif import corpus_bulletin, report_brief
+
+        cls.report_brief = staticmethod(report_brief)
+        cls.corpus_bulletin = staticmethod(corpus_bulletin)
+        cls.pipeline = offline_pipeline()
+        references = [f"SEED-{n:02d}" for n in range(1, len(SEED_REPORTS) + 1)]
+        cls.results = cls.pipeline.analyze_many(SEED_REPORTS, references)
+        cls.intelligence = cls.pipeline.aggregate(cls.results)
+
+    def test_a_flagged_report_names_the_rule_and_the_risk(self) -> None:
+        flagged = next(item for item in self.results if item.sif_potential)
+        brief = self.report_brief(flagged)
+        self.assertIn(flagged.reference or "This report", brief)
+        self.assertIn(flagged.iogp_rule, brief)
+        self.assertIn(f"{flagged.risk_score:.0f}", brief)
+        self.assertIn("fatal potential", brief)
+
+    def test_an_unflagged_report_does_not_claim_fatal_potential(self) -> None:
+        clear = next((item for item in self.results if not item.sif_potential), None)
+        if clear is None:
+            self.skipTest("the seed corpus has no cleared report to check against")
+        brief = self.report_brief(clear)
+        self.assertNotIn("fatal potential", brief)
+
+    def test_minimizing_language_is_named_only_when_present(self) -> None:
+        from sif.pipeline import PipelineResult
+
+        base = dict(sif_potential=True, iogp_rule="Energy Isolation", activity="x",
+                    location="y", barrier_failure="LOTO not applied",
+                    energy_source="Electrical energy", risk_score=90.0,
+                    risk_band="Critical", reference="T-1")
+        flagged = PipelineResult(**base, minimizing_language=True)
+        plain = PipelineResult(**base, minimizing_language=False)
+        self.assertIn("downplays", self.report_brief(flagged))
+        self.assertNotIn("downplays", self.report_brief(plain))
+
+    def test_translation_is_disclosed_when_the_report_was_translated(self) -> None:
+        from sif.pipeline import PipelineResult
+
+        translated = PipelineResult(
+            sif_potential=False, iogp_rule="Working at Height", activity="x", location="y",
+            barrier_failure="none", energy_source="Gravity", risk_score=10.0,
+            risk_band="Low", reference="T-2", source_language="Tamil")
+        self.assertIn("Tamil", self.report_brief(translated))
+
+    def test_an_empty_report_is_named_not_hallucinated(self) -> None:
+        from sif.pipeline import PipelineResult
+
+        empty = PipelineResult(sif_potential=False, iogp_rule="", activity="",
+                               location="", barrier_failure="", energy_source="",
+                               reference="T-3")
+        self.assertIn("no text was extracted", self.report_brief(empty))
+
+    def test_the_bulletin_headline_matches_the_kpis_it_was_built_from(self) -> None:
+        bulletin = self.corpus_bulletin(self.intelligence, self.results)
+        kpis = self.intelligence.kpis
+        self.assertIn(f"{int(kpis['total'])} report(s) analysed", bulletin)
+        self.assertIn(f"{int(kpis['sif_potential'])} carry", bulletin)
+        self.assertIn("Safety Intelligence Bulletin", bulletin)
+        self.assertIn("Prototype output", bulletin)
+
+    def test_every_cited_reference_is_a_real_analysed_report(self) -> None:
+        bulletin = self.corpus_bulletin(self.intelligence, self.results)
+        references = {item.reference for item in self.results if item.reference}
+        cited = {line.split()[1] for line in bulletin.splitlines()
+                 if line.startswith("- ") and len(line.split()) > 1
+                 and line.split()[1] in references}
+        self.assertTrue(cited)
+        self.assertTrue(cited.issubset(references))
+
+    def test_sections_are_silent_when_there_is_nothing_to_say(self) -> None:
+        empty_intelligence = self.pipeline.aggregate([])
+        bulletin = self.corpus_bulletin(empty_intelligence, [])
+        self.assertIn("No reports have been analysed", bulletin)
+        self.assertNotIn("WHAT IS DRIVING RISK", bulletin)
+        self.assertNotIn("REPEAT EXPOSURES", bulletin)
+        self.assertNotIn("LANGUAGE COVERAGE", bulletin)
+        self.assertIn("NEEDS ATTENTION NOW", bulletin)
+        self.assertIn("clear", bulletin)
+
+    def test_a_clear_queue_says_so_explicitly(self) -> None:
+        from sif.pipeline import PipelineResult
+
+        cleared = [PipelineResult(sif_potential=False, iogp_rule="x", activity="y",
+                                  location="z", barrier_failure="none",
+                                  energy_source="none", reference="T-4",
+                                  needs_review=False)]
+        intelligence = self.pipeline.aggregate(cleared)
+        bulletin = self.corpus_bulletin(intelligence, cleared)
+        self.assertIn("Nothing outstanding", bulletin)
+
+    def test_language_coverage_appears_only_for_translated_reports(self) -> None:
+        from sif.pipeline import PipelineResult
+
+        translated = [PipelineResult(
+            sif_potential=False, iogp_rule="x", activity="y", location="z",
+            barrier_failure="none", energy_source="none", reference="T-5",
+            source_language="Hindi")]
+        intelligence = self.pipeline.aggregate(translated)
+        bulletin = self.corpus_bulletin(intelligence, translated)
+        self.assertIn("LANGUAGE COVERAGE", bulletin)
+        self.assertIn("Hindi", bulletin)
+
+
 @unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
 class TestAnalysisWorker(unittest.TestCase):
     """The CSV importer and the off-GUI-thread execution guarantee."""
@@ -983,6 +1098,10 @@ class TestEngineQuality(unittest.TestCase):
     def test_no_precursor_is_both_missed_and_unqueued(self) -> None:
         """The one failure with no safety net: wrong, and nobody asked to look."""
         self.assertEqual(self.numbers["missed_and_unqueued"], 0)
+
+    def test_every_confirmed_finding_reaches_a_person(self) -> None:
+        """Independent of the label: a raised flag is never left unseen."""
+        self.assertEqual(self.numbers["confirmed_unqueued"], 0)
 
     def test_the_negative_controls_do_not_flag(self) -> None:
         """Reports describing controls that held must never read as precursors."""

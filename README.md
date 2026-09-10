@@ -156,7 +156,8 @@ console runs on the rule and semantic paths and the Settings tab says so; withou
 | 4. Evidence engine | `sif/evidence.py` | Collects lexical cues, nearest semantic prototypes with scores, per-field provenance and the decision path, then writes the one-line explanation shown in the UI. |
 | 5. Risk score | `sif/scoring.py` | `100 × P(SIF) × energy severity × barrier criticality × evidence factor`, banded Critical / High / Medium / Low. Ordinal, for ranking a queue — not an actuarial probability. |
 | 6a. Pattern detection | `sif/patterns.py` | Location, activity, rule-at-location and repeat-barrier clusters (≥2 reports), ranked by **SIF-precursor density** — the share of a group's reports carrying fatal potential — discounted by a Wilson lower bound so a 2-of-2 group cannot outrank a well-evidenced one. |
-| 6b. Human review | `sif/review.py` | Queues what a person must verify: model/rule **disagreement**, **critical risk**, **thin evidence**, **high energy with no rule match**, or **energy with no barrier found**. Records the expert's decision, persists it, and hands it back as the labels training uses. |
+| 6b. Human review | `sif/review.py` | Queues what a person must verify: model/rule **disagreement**, **critical risk**, **thin evidence**, **high energy with no rule match**, **energy with no barrier found**, or, as a catch-all, **any other confirmed finding** — no report the engine calls SIF-potential is ever closed without a person, whatever band it scored in. Flags dismissive wording ("nothing serious") that undersells a real finding. Records the expert's decision, persists it, and hands it back as the labels training uses. |
+| 6c. Narrative generation | `sif/narrative.py` | Turns the same structured facts back into prose: a one-paragraph brief per report, or a multi-section bulletin over a corpus — headline numbers, what is driving risk, repeat exposures, language coverage, and exactly what still needs a person. Templated from verified fields, not model-generated, so every sentence traces back to a report. |
 | 7. Dashboard | `main.py` + `ui/` | Sidebar navigation, KPI tiles, painted charts, the three result tables, evidence panel and Settings. |
 
 ### The learned layer (MLOps)
@@ -255,7 +256,7 @@ rather than raising, so a malformed row never breaks a batch.
 
 ## How good is the engine?
 
-A number, not an adjective. `evaluation/` holds 40 hand-labelled reports and a
+A number, not an adjective. `evaluation/` holds 42 hand-labelled reports and a
 scorer:
 
 ```bash
@@ -265,11 +266,12 @@ python evaluation/evaluate.py --errors   # every miss, with its text
 
 | Metric | Before the barrier work | Now |
 | --- | --- | --- |
-| **Recall** (of 24 real precursors) | 0.292 | **1.000** |
-| **Precision** (16 negative controls) | 1.000 | **1.000** |
+| **Recall** (of 25 real precursors) | 0.292 | **1.000** |
+| **Precision** (17 negative controls) | 1.000 | **1.000** |
 | Barrier recall | 0.292 | **1.000** |
 | Energy recall | 0.917 | **1.000** |
-| Rule accuracy (on true positives) | 0.792 | **0.958** |
+| Rule accuracy (on true positives) | 0.792 | **0.960** |
+| Confirmed findings never queued | 5 | **0** |
 
 Recall was the problem, and the cause was specific: `P(SIF) = energy x barrier`,
 so a barrier the vocabulary could not name scored zero however obvious the
@@ -278,23 +280,34 @@ missing implicit ones - "clipped to the handrail **instead of** the anchor
 point", "car-sealed open with no tag", "no test for dead", "the trip tank had not
 been monitored". Those are now in the knowledge base.
 
-**Read those numbers honestly.** The labelled set is 40 cases written for this
+**Read those numbers honestly.** The labelled set is 42 cases written for this
 repository, and the vocabulary was extended after seeing which of them missed -
 that is fitting to the test. Two things make it more than that:
 
-* **16 negative controls.** Every positive case has a twin describing the same
+* **17 negative controls.** Every positive case has a twin describing the same
   incident with the barrier *holding* ("LOTO was applied and verified", "the
   exclusion zone was barricaded and the banksman kept the area clear"). Chasing
   recall by loosening patterns fails those immediately, and they include two
   counterfactual traps using the exact "would have been struck" phrasing that the
-  near-miss pattern looks for.
+  near-miss pattern looks for, and one that pairs dismissive wording ("nothing
+  serious to report") with a barrier that genuinely held.
 * **A held-out corpus.** The 18 reports in `samples/near_miss_reports.csv` were
   written before this work and were not tuned against. Flags there went from 5 to
   13, and the five that still do not flag are the five low-consequence ones.
 
+A third check is not a recall number at all: **every confirmed finding must
+reach a person**, independent of whether the label agrees. Measuring that
+against the labelled set and the sample corpus both found five confirmed
+findings - outside the Critical band, with clean extraction and no
+disagreement - that matched none of the queue's triggers and reached nobody.
+The queue's own contract (see `sif/review.py`) says that must never happen; a
+catch-all trigger now closes it, and `confirmed_unqueued` is asserted at 0
+alongside recall and precision.
+
 The real number comes from OIL's own reports, and the review queue is what
 produces it: `test_sif.py::TestEngineQuality` holds the floor at 0.90 recall and
-0.90 precision so a future change cannot quietly undo this.
+0.90 precision, and asserts `confirmed_unqueued == 0`, so a future change cannot
+quietly undo either.
 
 ## Review happens in English
 

@@ -144,6 +144,13 @@ Sorted by how much a human is needed, not by date:
 | **Thin evidence** | Very little extractable text | Usually a reporting-quality problem — go back to the reporter |
 | **Unclassified exposure** | High energy, no rule matched | Vocabulary the system has not seen |
 | **Energy, no barrier** | Energy and a rule matched, no failed barrier found | Confirm the barrier held, or name the one that did not |
+| **SIF potential** | A confirmed finding outside every trigger above (High or Medium band, clean extraction, no disagreement) | The catch-all: nothing the engine confirms is ever closed unseen - verify it like any other |
+
+If a report's own wording downplays what it describes ("nothing serious", "no
+big deal") while the facts say otherwise, the reason line says so explicitly:
+*"the report's own wording downplays this... the finding rests on the extracted
+facts, not the tone."* Decide on the facts in the fields above, not the tone of
+the narrative.
 
 ### Deciding one
 
@@ -208,6 +215,7 @@ looked at; a false positive costs a reviewer two minutes.
 | You want | Do this |
 | --- | --- |
 | The analysed corpus | **File → Export results CSV** (`Ctrl+S`) |
+| A written safety bulletin over the corpus | **File → Generate safety bulletin...** (`Ctrl+B`) - headline numbers, what is driving risk, repeat exposures, and exactly what still needs a person, as a `.txt` file |
 | The decision trail | Human review → **Decision trail** tab → **Export the trail as CSV** |
 | The audit trail | **File → Export the audit trail**, or Settings → Audit trail |
 | What the software did | Settings → **System logging** (rotates) |
