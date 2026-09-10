@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -135,6 +136,9 @@ class DashboardView(QWidget):
 
     #: Below this the dashboard scrolls instead of squeezing its panels.
     MIN_CONTENT_HEIGHT = 860
+    #: Below this the selected-report column scrolls rather than compressing its
+    #: rows into one another.
+    MIN_DETAIL_HEIGHT = 460
 
     def __init__(self) -> None:
         super().__init__()
@@ -153,16 +157,13 @@ class DashboardView(QWidget):
     # -- construction ------------------------------------------------------
 
     def _build_kpis(self) -> QHBoxLayout:
-        self.tile_total = KpiTile("TOTAL REPORTS", "0", C.TEXT, note="Processed this run",
-                                  glyph="📄")
-        self.tile_sif = KpiTile("SIF-POTENTIAL EVENTS", "0", C.DANGER, note="0.0% of corpus",
-                                glyph="⚠")
+        self.tile_total = KpiTile("TOTAL REPORTS", "0", C.TEXT, note="Processed this run")
+        self.tile_sif = KpiTile("SIF-POTENTIAL EVENTS", "0", C.DANGER, note="0.0% of corpus")
         self.tile_risk = KpiTile("MEAN RISK SCORE", "0.0", C.ACCENT, unit="/ 100",
-                                 note="Ranked exposure", glyph="◎")
+                                 note="Ranked exposure")
         self.tile_review = KpiTile("AWAITING HUMAN REVIEW", "0", C.WARN,
-                                   note="Need expert validation", glyph="👤")
-        self.tile_model = KpiTile("MODEL AGREEMENT", "-", C.BLUE, note="No model trained",
-                                  glyph="🧠")
+                                   note="Need expert validation")
+        self.tile_model = KpiTile("MODEL AGREEMENT", "-", C.BLUE, note="No model trained")
 
         row = QHBoxLayout()
         row.setSpacing(12)
@@ -201,7 +202,7 @@ class DashboardView(QWidget):
         layout.setSpacing(14)
         layout.addStretch(1)
         for colour, text in entries:
-            dot = QLabel("●")
+            dot = QLabel("")
             dot.setStyleSheet(f"color: {colour}; font-size: 11px;")
             label = QLabel(text)
             label.setObjectName("Faint")
@@ -211,11 +212,27 @@ class DashboardView(QWidget):
         return widget
 
     def _build_workspace(self) -> QHBoxLayout:
+        # A splitter rather than a fixed three-column layout: an operator reading
+        # long narratives wants the middle wide, one entering reports wants the
+        # left wide, and a desktop application lets them decide by dragging.
+        self.workspace = QSplitter(Qt.Orientation.Horizontal)
+        self.workspace.setChildrenCollapsible(False)
+        self.workspace.setHandleWidth(8)
+        # Minimums sized for what each column has to show: the detail column
+        # carries label/value rows that elide when squeezed, so it gets the room
+        # to render a rule name in full before the operator touches a handle.
+        for widget, minimum in ((self._build_ingestion(), 300),
+                                (self._build_tabs(), 420),
+                                (self._build_detail(), 330)):
+            widget.setMinimumWidth(minimum)
+            self.workspace.addWidget(widget)
+        self.workspace.setStretchFactor(0, 2)
+        self.workspace.setStretchFactor(1, 5)
+        self.workspace.setStretchFactor(2, 2)
+
         row = QHBoxLayout()
         row.setSpacing(12)
-        row.addWidget(self._build_ingestion(), stretch=2)
-        row.addWidget(self._build_tabs(), stretch=5)
-        row.addWidget(self._build_detail(), stretch=2)
+        row.addWidget(self.workspace)
         return row
 
     def _build_ingestion(self) -> QWidget:
@@ -238,7 +255,7 @@ class DashboardView(QWidget):
         self.encoder_box.currentIndexChanged.connect(
             lambda: self.encoder_changed.emit(self.encoder_box.currentData()))
 
-        analyse = QPushButton("Analyse Report  →")
+        analyse = QPushButton("Analyse report")
         analyse.setObjectName("Primary")
         analyse.clicked.connect(
             lambda: self.analyse_requested.emit(self.input_box.toPlainText()))
@@ -246,11 +263,11 @@ class DashboardView(QWidget):
         quick = QLabel("QUICK ACTIONS")
         quick.setObjectName("Caption")
 
-        csv_button = QPushButton("⬆   Batch Import CSV")
+        csv_button = QPushButton("Batch import CSV")
         csv_button.clicked.connect(self.csv_requested.emit)
-        seed_button = QPushButton("▤   Load 5 Seed Incidents")
+        seed_button = QPushButton("Load 5 seed incidents")
         seed_button.clicked.connect(self.seed_requested.emit)
-        clear_button = QPushButton("🗑   Clear Dashboard")
+        clear_button = QPushButton("Clear dashboard")
         clear_button.clicked.connect(self.clear_requested.emit)
 
         self.progress = QProgressBar()
@@ -276,9 +293,9 @@ class DashboardView(QWidget):
         self.matrix_table = DataTable(compact, on_select=self.row_selected.emit)
         self.hotspot_table = DataTable(HOTSPOT_COLUMNS)
         self.review_table = DataTable(REVIEW_COLUMNS)
-        self.tabs.addTab(self.matrix_table, "▦  Parsed Incident Matrix")
-        self.tabs.addTab(self.hotspot_table, "⌖  Risk Hotspots (0)")
-        self.tabs.addTab(self.review_table, "👤  Human Review Queue (0)")
+        self.tabs.addTab(self.matrix_table, "Parsed incident matrix")
+        self.tabs.addTab(self.hotspot_table, "Risk hotspots (0)")
+        self.tabs.addTab(self.review_table, "Human review queue (0)")
 
         self.count_label = QLabel("No reports analysed yet")
         self.count_label.setObjectName("Faint")
@@ -302,39 +319,53 @@ class DashboardView(QWidget):
         pills.addStretch(1)
         pills.addWidget(self.detail_risk)
 
-        self.detail_reference = QLabel("-")
+        self.detail_reference = QLabel("No report selected")
         self.detail_reference.setObjectName("Muted")
+        self.detail_reference.setWordWrap(True)
 
+        # An empty read-only box with no placeholder reads as a rendering fault
+        # rather than as "nothing is selected yet" - it is the same dark block as
+        # a panel that failed to paint. Say what it is waiting for.
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
-        self.detail_text.setFixedHeight(96)
+        self.detail_text.setPlaceholderText("Select a report to read it here.")
+        self.detail_text.setMinimumHeight(96)
+        self.detail_text.setMaximumHeight(150)
 
         self.detail_fields = {
-            "rule": FieldRow("⚠", "IOGP Rule", "-", C.WARN),
-            "energy": FieldRow("⚡", "Energy Source", "-", C.DANGER),
-            "barrier": FieldRow("⛔", "Failed Barrier", "-", C.DANGER),
-            "activity": FieldRow("⚙", "Activity", "-", C.BLUE),
-            "location": FieldRow("◎", "Location", "-", C.ACCENT),
-            "model": FieldRow("🧠", "Model P(SIF)", "-", C.PURPLE),
+            "rule": FieldRow("", "IOGP Rule", "-", C.WARN),
+            "energy": FieldRow("", "Energy Source", "-", C.DANGER),
+            "barrier": FieldRow("", "Failed Barrier", "-", C.DANGER),
+            "activity": FieldRow("", "Activity", "-", C.BLUE),
+            "location": FieldRow("", "Location", "-", C.ACCENT),
+            "model": FieldRow("", "Model P(SIF)", "-", C.PURPLE),
         }
 
         self.detail_evidence = QTextEdit()
         self.detail_evidence.setReadOnly(True)
         self.detail_evidence.setPlaceholderText("Evidence and reasoning appear here.")
 
-        review_button = QPushButton("👤  Mark for Review")
+        review_button = QPushButton("Mark for Review")
         review_button.setObjectName("Warning")
         review_button.clicked.connect(self.review_requested.emit)
 
-        panel.body.addLayout(pills)
-        panel.add(self.detail_reference)
-        panel.add(self.detail_text)
+        detail = QWidget()
+        detail_layout = QVBoxLayout(detail)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(8)
+        detail_layout.addLayout(pills)
+        detail_layout.addWidget(self.detail_reference)
+        detail_layout.addWidget(self.detail_text)
         for field in self.detail_fields.values():
-            panel.add(field)
+            detail_layout.addWidget(field)
         evidence_caption = QLabel("EVIDENCE & REASONING")
         evidence_caption.setObjectName("Caption")
-        panel.add(evidence_caption)
-        panel.add(self.detail_evidence, stretch=1)
+        detail_layout.addWidget(evidence_caption)
+        detail_layout.addWidget(self.detail_evidence, stretch=1)
+
+        # The narrative and the evidence scroll; "Mark for Review" does not, so
+        # the control an operator reaches for stays where they left it.
+        panel.add(_scrollable(detail, self.MIN_DETAIL_HEIGHT), stretch=1)
         panel.add(review_button)
         return panel
 
@@ -376,8 +407,8 @@ class DashboardView(QWidget):
             f"Showing {total} report(s)  ·  encoder: {kpis.get('encoder', 'not loaded')}")
 
     def update_tabs(self, hotspots: int, review: int) -> None:
-        self.tabs.setTabText(1, f"⌖  Risk Hotspots ({hotspots})")
-        self.tabs.setTabText(2, f"👤  Human Review Queue ({review})")
+        self.tabs.setTabText(1, f"Risk hotspots ({hotspots})")
+        self.tabs.setTabText(2, f"Human review queue ({review})")
 
     def show_detail(self, result: Optional[Dict[str, object]]) -> None:
         """Render one report in the right-hand analysis panel."""
@@ -386,7 +417,7 @@ class DashboardView(QWidget):
             self.detail_pill.set_colour(C.TEXT_DIM)
             self.detail_risk.setText("Risk: -")
             self.detail_risk.set_colour(C.TEXT_DIM)
-            self.detail_reference.setText("-")
+            self.detail_reference.setText("No report selected")
             self.detail_text.clear()
             self.detail_evidence.clear()
             for field in self.detail_fields.values():
@@ -400,7 +431,7 @@ class DashboardView(QWidget):
         self.detail_risk.setText(f"Risk: {float(result.get('risk_score', 0.0)):.1f}")
         self.detail_risk.set_colour(BAND_COLORS.get(band, C.OK))
         self.detail_reference.setText(
-            f"⛭  {result.get('reference') or 'unreferenced report'}")
+            str(result.get("reference") or "unreferenced report"))
         self.detail_text.setPlainText(str(result.get("raw_text", "")))
 
         self.detail_fields["rule"].set_value(str(result.get("iogp_rule", "-")))
@@ -415,7 +446,7 @@ class DashboardView(QWidget):
         evidence = result.get("evidence", {}) or {}
         cues = "; ".join(evidence.get("lexical_cues", [])) or "none"
         semantic = ", ".join(
-            f"{field} → {label} ({score:.2f})"
+            f"{field} to {label} ({score:.2f})"
             for field, (label, score) in (evidence.get("semantic_matches", {}) or {}).items()
         ) or "none"
         risk = evidence.get("risk", {}) or {}
@@ -481,14 +512,14 @@ class BatchUploadView(QWidget):
         explain.setObjectName("Muted")
         explain.setWordWrap(True)
 
-        add_button = QPushButton("📎   Add Documents (PDF / PNG / JPG / TXT)")
+        add_button = QPushButton("Add documents (PDF, PNG, JPG, TXT)")
         add_button.setObjectName("Primary")
         add_button.clicked.connect(self.files_requested.emit)
-        csv_button = QPushButton("⬆   Import CSV of reports")
+        csv_button = QPushButton("Import CSV of reports")
         csv_button.clicked.connect(self.csv_requested.emit)
-        analyse_button = QPushButton("▶   Analyse Extracted Blocks")
+        analyse_button = QPushButton("Analyse extracted blocks")
         analyse_button.clicked.connect(self.analyse_requested.emit)
-        clear_button = QPushButton("🗑   Clear Extraction List")
+        clear_button = QPushButton("Clear Extraction List")
         clear_button.clicked.connect(self.clear_requested.emit)
 
         buttons = QHBoxLayout()
@@ -626,9 +657,9 @@ class SettingsView(QWidget):
         self.level_box.setCurrentText("INFO")
         self.level_box.currentTextChanged.connect(self.log_level_changed.emit)
 
-        refresh = QPushButton("↻  Refresh")
+        refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.logs_refreshed.emit)
-        clear = QPushButton("🗑  Clear")
+        clear = QPushButton("Clear")
         clear.clicked.connect(self.logs_cleared.emit)
 
         self.log_path_label = QLabel("")
@@ -659,7 +690,7 @@ class SettingsView(QWidget):
         apply_button.clicked.connect(
             lambda: self.tracking_changed.emit(self.tracking_uri.text(),
                                                self.experiment_name.text()))
-        self.train_button = QPushButton("⚙  Train XGBoost on analysed corpus")
+        self.train_button = QPushButton("Train XGBoost on the analysed corpus")
         self.train_button.setObjectName("Primary")
         self.train_button.clicked.connect(self.train_requested.emit)
 

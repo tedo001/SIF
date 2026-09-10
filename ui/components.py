@@ -233,12 +233,12 @@ class Sidebar(QFrame):
         layout.setContentsMargins(16, 16, 12, 16)
         layout.setSpacing(10)
 
-        mark = QLabel("◧")
+        mark = QLabel("OIL")
         mark.setFixedSize(34, 34)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setStyleSheet(
             f"background-color: {C.BRAND}; color: white; border-radius: 8px;"
-            "font-size: 17px; font-weight: 700;")
+            "font-size: 12px; font-weight: 800; letter-spacing: 0.5px;")
 
         name = QLabel("Oil India Limited")
         name.setObjectName("BrandName")
@@ -266,9 +266,11 @@ class Sidebar(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(2)
 
-        leaf = QLabel("🌿")
-        leaf.setStyleSheet("font-size: 17px; border: none;")
-        layout.addWidget(leaf)
+        heading = QLabel("SAFETY FIRST")
+        heading.setStyleSheet(
+            f"color: {C.OK}; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+            "border: none;")
+        layout.addWidget(heading)
         for line in ("Safety", "People", "Environment", "Sustainable Growth"):
             label = QLabel(line)
             label.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 11px; border: none;")
@@ -282,7 +284,7 @@ class Sidebar(QFrame):
 
 
 class HeaderBar(QFrame):
-    """Application header: title block, search, notifications, user chip."""
+    """Application header: title block, search and the user chip."""
 
     search_changed = pyqtSignal(str)
 
@@ -309,9 +311,6 @@ class HeaderBar(QFrame):
         self.search.setFixedWidth(310)
         self.search.textChanged.connect(self.search_changed.emit)
 
-        self.notifications = QLabel("🔔")
-        self.notifications.setStyleSheet("font-size: 16px;")
-
         initials = "".join(part[0] for part in user_name.split()[:2]).upper() or "HSE"
         avatar = QLabel(initials)
         avatar.setFixedSize(34, 34)
@@ -336,7 +335,6 @@ class HeaderBar(QFrame):
         layout.addLayout(titles)
         layout.addStretch(1)
         layout.addWidget(self.search)
-        layout.addWidget(self.notifications)
         layout.addWidget(avatar)
         layout.addLayout(user_text)
 

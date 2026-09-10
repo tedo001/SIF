@@ -333,6 +333,25 @@ the version, and its own detail. Filter by kind, and export to CSV for an
 auditor. If the location cannot be written the trail says **MEMORY ONLY** rather
 than letting anyone believe it reached disk.
 
+## Desktop behaviour
+
+Both builds are desktop applications rather than mock-ups of one:
+
+* **No pictographs anywhere.** Every label is words or a typographic mark, so the
+  interface renders identically on a plant workstation with no emoji font. A test
+  in each suite fails if one creeps back in.
+* **Nothing decorative that does nothing.** The notification bell was a label
+  with no signal behind it; an indicator that never indicates anything teaches an
+  operator to ignore indicators, so it was removed rather than given a meaning.
+* **The window remembers itself.** Size, position and maximised state are saved
+  on close and restored on start - clamped to the screen actually attached, so a
+  geometry saved on a docked 4K monitor cannot open off-screen on a laptop.
+* **Draggable columns.** Build 1's dashboard workspace is a splitter: an operator
+  reading long narratives widens the middle, one entering reports widens the
+  left. Neither column can be collapsed to nothing.
+* **Minimum window size** of 1024x640, below which the layout is not honest about
+  what it can show.
+
 ## Scrolling
 
 Every page that can outgrow the window scrolls rather than compressing. Each

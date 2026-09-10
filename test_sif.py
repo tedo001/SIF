@@ -45,6 +45,19 @@ except ImportError:  # pragma: no cover - environment dependent
     HAS_PYQT = False
 
 
+# One QApplication for the whole module, created before any test can install a
+# bare QCoreApplication as the singleton. A QCoreApplication satisfies
+# ``QCoreApplication.instance()`` but cannot host a widget, so a worker test that
+# creates one first used to leave every later GUI test unable to build anything.
+# A QApplication is a QCoreApplication, so it serves both.
+_QT_APP = None
+if HAS_PYQT:  # pragma: no branch - trivial
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication as _QApplication
+
+    _QT_APP = _QApplication.instance() or _QApplication([])
+
+
 def offline_pipeline() -> SIFPipeline:
     """A pipeline pinned to the deterministic offline encoder."""
     return SIFPipeline(encoder=HashingEncoder())
@@ -794,10 +807,7 @@ class TestInterfaceWidgets(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from PyQt6.QtWidgets import QApplication
-
-        cls.app = QApplication.instance() or QApplication([])
+        cls.app = _QT_APP
 
     def test_data_table_formats_cells(self) -> None:
         from ui.components import DataTable
@@ -874,6 +884,71 @@ class TestInterfaceWidgets(unittest.TestCase):
         self.assertEqual(view.log_table.rowCount(), 1)
         self.assertEqual(view.run_table.rowCount(), 1)
         self.assertEqual(view.importance_table.rowCount(), 1)
+
+
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestBuildOneInterface(unittest.TestCase):
+    """Build 1's window: no pictographs, and it behaves like a desktop app."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _QT_APP
+
+    def test_the_interface_carries_no_pictographs(self) -> None:
+        """It must render identically on a workstation with no emoji font."""
+        import re
+
+        import main
+        from ui import charts, components, theme, views
+
+        pattern = re.compile("[\U0001F000-\U0001FAFF\u2190-\u2BFF\u2600-\u27BF]")
+        for module in (main, components, views, theme, charts):
+            with open(module.__file__, encoding="utf-8") as handle:
+                found = pattern.findall(handle.read())
+            self.assertEqual(found, [], f"{os.path.basename(module.__file__)}: {found}")
+
+    def test_the_workspace_columns_can_be_resized(self) -> None:
+        """A fixed three-column split is a mock-up; a draggable one is an app."""
+        from PyQt6.QtWidgets import QSplitter
+
+        from ui.views import DashboardView
+
+        dashboard = DashboardView()
+        self.assertIsInstance(dashboard.workspace, QSplitter)
+        self.assertEqual(dashboard.workspace.count(), 3)
+        self.assertFalse(dashboard.workspace.childrenCollapsible(),
+                         "a column dragged to nothing cannot be dragged back")
+
+    def test_the_empty_detail_panel_says_it_is_empty(self) -> None:
+        """An unexplained dark block reads as a rendering fault, not as 'no data'."""
+        from ui.views import DashboardView
+
+        dashboard = DashboardView()
+        dashboard.show_detail(None)
+        self.assertTrue(dashboard.detail_text.placeholderText())
+        self.assertEqual(dashboard.detail_reference.text(), "No report selected")
+
+    def test_the_window_remembers_where_it_was(self) -> None:
+        """Saved geometry is clamped to this screen, and nonsense is ignored."""
+        import main
+        from sif import prefs
+
+        stored = {}
+        real = (prefs.get, prefs.set_value)
+        prefs.get = lambda key, default=None: stored.get(key, default)
+        prefs.set_value = lambda key, value: stored.__setitem__(key, value)
+        try:
+            window = main.MainWindow()
+            window.resize(1200, 780)
+            window._save_geometry()
+            self.assertEqual(stored["window_geometry"]["width"], 1200)
+            self.assertGreaterEqual(window.minimumSize().width(), 1024)
+
+            stored["window_geometry"] = {"left": "nonsense"}
+            main.MainWindow()._restore_geometry()   # must not raise
+            window.close()
+        finally:
+            prefs.get, prefs.set_value = real
 
 
 class TestEngineQuality(unittest.TestCase):

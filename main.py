@@ -30,7 +30,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QRect, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication,
@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 )
 
 from sif import SEED_REPORTS, SIFPipeline
+from sif import prefs
 from sif.lexical import CSV_TEXT_COLUMNS
 from sif.logging_setup import (LOG_LEVELS, active_log_file, configure_logging,
                                log_file_path, set_level)
@@ -70,18 +71,26 @@ __all__ = ["AnalysisWorker", "ExtractionWorker", "TrainingWorker", "OCRProbeWork
 
 LOGGER = logging.getLogger("sif.app")
 
-APP_NAME = "SIF Insight Console"
-APP_SUBTITLE = "UA/UC & Near-Miss Intelligence   |   PS 26165"
+APP_NAME = "SENTRA"
+#: The console an operator sees is SENTRA. The ``sif`` package keeps its
+#: name, and so does the settings folder, because an operator's decisions
+#: live there.
+APP_LONG_NAME = "SENTRA - SIF Insight Console"
+APP_SUBTITLE = ("Sense the Risk  ·  Stop the Incident   |   "
+                "UA/UC and near-miss intelligence   |   PS 26165")
 
+#: ``(key, marker, label)``. The marker is a typographic rule, not a pictograph:
+#: it renders identically on a plant workstation with no emoji font, and a nav
+#: rail reads faster as a list of words than as a column of small pictures.
 NAV_ITEMS = (
-    ("dashboard", "▤", "Dashboard"),
-    ("analysis", "✎", "Report Analysis"),
-    ("batch", "⬆", "Batch Upload"),
-    ("matrix", "▦", "Incident Matrix"),
-    ("hotspots", "⌖", "Risk Hotspots"),
-    ("review", "👤", "Human Review"),
-    ("analytics", "📈", "Analytics"),
-    ("settings", "⚙", "Settings"),
+    ("dashboard", "", "Dashboard"),
+    ("analysis", "", "Report Analysis"),
+    ("batch", "", "Batch Upload"),
+    ("matrix", "", "Incident Matrix"),
+    ("hotspots", "", "Risk Hotspots"),
+    ("review", "", "Human Review"),
+    ("analytics", "", "Analytics"),
+    ("settings", "", "Settings"),
 )
 
 DOCUMENT_FILTER = ("Documents (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.txt *.md);;"
@@ -282,7 +291,8 @@ class MainWindow(QMainWindow):
         self.last_run_count = 0
 
         self.setWindowTitle(APP_NAME)
-        self.resize(1600, 980)
+        self.setMinimumSize(1024, 640)
+        self._restore_geometry()
         self.setStyleSheet(STYLESHEET)
         self._build_ui()
         self._connect_views()
@@ -804,8 +814,59 @@ class MainWindow(QMainWindow):
 
     # -- Qt lifecycle ------------------------------------------------------
 
+    #: Never open larger than this share of the screen, however big the last
+    #: session's window was - a saved geometry from a docked 4K monitor must not
+    #: open off-screen on a laptop.
+    MAX_SCREEN_SHARE = 0.92
+
+    def _restore_geometry(self) -> None:
+        """Open where the operator left the window, sized for this screen.
+
+        A desktop application remembers itself. It also has to survive being
+        moved between machines: a geometry saved on one monitor is clamped to
+        what this screen can actually show, and anything that would open
+        off-screen falls back to a centred default.
+        """
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        saved = prefs.get("window_geometry", {})
+        if isinstance(saved, dict) and available is not None:
+            try:
+                width = min(int(saved["width"]),
+                            int(available.width() * self.MAX_SCREEN_SHARE))
+                height = min(int(saved["height"]),
+                             int(available.height() * self.MAX_SCREEN_SHARE))
+                left, top = int(saved["left"]), int(saved["top"])
+                rect = QRect(left, top, max(width, 1024), max(height, 640))
+                if available.intersects(rect):
+                    self.setGeometry(rect)
+                    if saved.get("maximised"):
+                        self.showMaximized()
+                    return
+            except (KeyError, TypeError, ValueError):
+                LOGGER.debug("Ignoring unreadable saved window geometry")
+
+        if available is not None:
+            self.resize(min(1600, int(available.width() * self.MAX_SCREEN_SHARE)),
+                        min(980, int(available.height() * self.MAX_SCREEN_SHARE)))
+            frame = self.frameGeometry()
+            frame.moveCenter(available.center())
+            self.move(frame.topLeft())
+        else:  # pragma: no cover - headless, no screen to measure
+            self.resize(1600, 980)
+
+    def _save_geometry(self) -> None:
+        """Remember where and how big the window was."""
+        rect = self.normalGeometry() if self.isMaximized() else self.geometry()
+        prefs.set_value("window_geometry", {
+            "left": rect.left(), "top": rect.top(),
+            "width": rect.width(), "height": rect.height(),
+            "maximised": self.isMaximized(),
+        })
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Stop timers and any running worker before closing."""
+        self._save_geometry()
         self.log_timer.stop()
         if self.worker is not None and self.worker.isRunning():
             self.worker.requestInterruption()
