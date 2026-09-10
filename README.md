@@ -18,6 +18,9 @@ Other pages: [Settings — system logging & MLOps](docs/settings-mlops.png) ·
 [Analytics](docs/analytics.png) · [Batch upload](docs/batch-upload.png) ·
 [Human review queue](docs/review-queue.png).
 
+> **Start here:** [USING_SENTRA.md](USING_SENTRA.md) — the click-by-click flow,
+> from first launch to working the review queue.
+>
 > **Operating manual:** [INSTRUCTION.md](INSTRUCTION.md) — the rules the system
 > must be used under, step-by-step install and daily process, how to train the
 > model on reviewed labels, and what has to change before it is trusted on live
