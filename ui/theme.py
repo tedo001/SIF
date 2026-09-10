@@ -9,9 +9,10 @@ The stylesheet is a plain Qt style sheet string; widgets that need painting
 from __future__ import annotations
 
 import os
+from typing import Mapping
 
 __all__ = ["C", "STYLESHEET", "BAND_COLORS", "SEVERITY_COLORS", "CATEGORICAL", "ASSETS",
-           "PAGE_MARGIN"]
+           "PAGE_MARGIN", "apply_palette"]
 
 #: Directory holding the small PNG arrows used by the scroll controls. Qt style
 #: sheets cannot draw a triangle reliably across styles, so the stepper arrows
@@ -73,6 +74,27 @@ BAND_COLORS = {"Critical": C.DANGER, "High": "#fb923c", "Medium": C.WARN, "Low":
 
 #: Severity hint -> colour.
 SEVERITY_COLORS = {"High": C.DANGER, "Medium": C.WARN, "Low": C.OK}
+
+
+def apply_palette(palette: Mapping[str, str]) -> None:
+    """Repoint the shared colours before any window is built.
+
+    Widgets that paint themselves - badges, KPI values, chart series, the brand
+    mark - read :class:`C` when they are constructed, so a second skin cannot be
+    delivered by a style sheet alone. This rebinds the names and refreshes the
+    derived maps, which is enough for the whole interface to follow.
+
+    Call it *before* constructing a window. Nothing calls it by default, so the
+    console's own look is unchanged unless an entry point asks for another one.
+    """
+    for name, value in palette.items():
+        if not hasattr(C, name):
+            raise KeyError(f"unknown colour {name!r}")
+        setattr(C, name, value)
+
+    BAND_COLORS.update({"Critical": C.DANGER, "Medium": C.WARN, "Low": C.OK})
+    SEVERITY_COLORS.update({"High": C.DANGER, "Medium": C.WARN, "Low": C.OK})
+
 
 #: Fixed categorical order for the energy donut - assigned by position, never
 #: cycled, so a category keeps its colour as the mix changes.

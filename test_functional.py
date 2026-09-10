@@ -591,5 +591,109 @@ class TestTranslationWithoutAManualProbe(unittest.TestCase):
         self.assertEqual(self.window.rows[0]["translated_text"], "")
 
 
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestDeepNavyBuild(unittest.TestCase):
+    """app.py: the same console as app2.py, wearing the second skin.
+
+    The point of the re-skin being an entry-point concern rather than a second
+    controller is that neither build can quietly lose a capability the other
+    has. These tests hold that: the window app.py builds is the full one, and
+    the palette really does move.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def setUp(self) -> None:
+        from ui.theme import C
+
+        # apply_palette rebinds module-level state, so put it back afterwards or
+        # every later test in this process inherits the second skin.
+        self._palette = {name: getattr(C, name) for name in vars(C)
+                         if name.isupper() and isinstance(getattr(C, name), str)}
+
+    def tearDown(self) -> None:
+        from ui.theme import apply_palette
+
+        apply_palette(self._palette)
+
+    def test_it_carries_every_capability_of_the_untouched_build(self) -> None:
+        import app
+
+        window = app.build_window()
+        self.addCleanup(window.close)
+
+        for capability in ("workflow", "ingest_view", "dashboard", "report_view",
+                           "hotspot_view", "review_view", "analytics_view",
+                           "engines_view", "settings_view", "audit", "decisions",
+                           "mlops", "pipeline", "llm", "extractor"):
+            self.assertTrue(hasattr(window, capability),
+                            f"app.py lost {capability}, which app2.py has")
+        for action in ("generate_bulletin", "export_audit", "clear_corpus",
+                       "record_decision", "train_model", "check_llm"):
+            self.assertTrue(callable(getattr(window, action, None)),
+                            f"app.py lost {action}()")
+
+    def test_the_skin_actually_changes_the_palette(self) -> None:
+        import app
+        from ui import gov_theme
+        from ui.theme import C
+
+        before = C.ACCENT
+        window = app.build_window()
+        self.addCleanup(window.close)
+
+        self.assertEqual(C.ACCENT, gov_theme.PALETTE["ACCENT"])
+        self.assertNotEqual(C.ACCENT, before, "the second skin must not be the first")
+        self.assertIn("14b8a6", window.styleSheet())
+
+    def test_a_long_field_value_cannot_widen_the_detail_panel(self) -> None:
+        """A long barrier list must elide, not push the panel past its pane.
+
+        FieldRow elides to fit, but a plain label still reports its full text as
+        its minimum width, so before this was pinned the "Failed barrier" row
+        could force the whole case wider than the pane holding it - taking the
+        wrapped brief and the narrative off the right-hand edge with it. It fit
+        in one skin only by luck, on one corpus.
+        """
+        from PyQt6.QtWidgets import QScrollArea
+
+        import app
+
+        window = app.build_window()
+        self.addCleanup(window.close)
+        window.resize(1600, 950)
+        window.show()
+        self.app.processEvents()
+
+        window.rows = [dict(
+            reference="LONG-1", raw_text="Cable left ungrounded", sif_potential=True,
+            risk_score=99.0, risk_band="Critical", iogp_rule="Energy Isolation",
+            activity="maintenance", location="Pump station", energy_source="Electrical energy",
+            barrier_failure="Energy isolation / LOTO not applied or verified; Permit to "
+                            "work / JSA absent, expired or not followed; Exclusion zone / "
+                            "barricading absent; Gas testing / ventilation missing",
+            high_energy=True, barrier_failed=True, confidence=0.9)]
+        window._refresh()
+        window.navigate("review")
+        self.app.processEvents()
+        window.select_review_row(0)
+        self.app.processEvents()
+
+        for area in window.review_view.findChildren(QScrollArea):
+            self.assertLessEqual(
+                area.widget().width(), area.viewport().width() + 1,
+                "a field value has pushed the case wider than the pane holding it")
+
+    def test_the_two_builds_are_told_apart_in_the_title_bar(self) -> None:
+        import app
+
+        window = app.build_window()
+        self.addCleanup(window.close)
+        self.assertNotEqual(window.windowTitle(), "SENTRA - build 2")
+        self.assertIn("SENTRA", window.windowTitle())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

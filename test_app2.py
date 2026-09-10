@@ -643,15 +643,22 @@ class TestWorkflowAndInterface(unittest.TestCase):
                          Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.assertEqual(area.widget().minimumHeight(), 640)
 
-    def test_original_build_is_untouched(self) -> None:
-        """app.py must keep working exactly as before."""
+    def test_app2_stays_on_the_console_s_own_look(self) -> None:
+        """app2.py is the untouched build: it must not reach for the second skin.
+
+        app.py now carries the same capabilities in the deep-navy design, and
+        the two are only distinguishable because the re-skin is applied by the
+        entry point rather than baked into the controller they share.
+        """
         import app
-        import main as build_one
+        import app2
 
         self.assertTrue(hasattr(app, "main"))
-        self.assertTrue(hasattr(build_one, "MainWindow"))
-        with open(app.__file__, encoding="utf-8") as handle:
-            self.assertNotIn("main2", handle.read())
+        self.assertTrue(hasattr(app2, "main"))
+        with open(app2.__file__, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn("gov_theme", source)
+        self.assertNotIn("apply_palette", source)
 
 
 def _result(reference: str, text: str, **fields) -> PipelineResult:

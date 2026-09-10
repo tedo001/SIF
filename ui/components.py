@@ -482,6 +482,16 @@ class FieldRow(QWidget):
         self._value.setWordWrap(False)
         self._value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._value.setStyleSheet(f"color: {C.TEXT}; font-weight: 600;")
+        # Ignored, so the layout never asks how wide the text would like to be.
+        # This row elides to fit, but a plain label still reports its full text
+        # as its minimum, and a long barrier list ("LOTO not applied or
+        # verified; Permit to work / JSA absent, expired or not followed")
+        # then pushes the whole detail panel wider than the pane holding it -
+        # at which point every sibling, wrapped text included, is cut off at
+        # the edge. The value takes the width it is given and shortens.
+        self._value.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                  QSizePolicy.Policy.Preferred)
+        self._value.setMinimumWidth(60)
         self._full_value = value
 
         icon = QLabel(glyph)
