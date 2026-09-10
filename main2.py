@@ -111,6 +111,8 @@ class AnalysisWorker(QThread):
     status = pyqtSignal(str)
     failed = pyqtSignal(str)
     completed = pyqtSignal(int)
+    #: ``(usable, reason)`` the first time a report actually needs translating.
+    translation_state = pyqtSignal(bool, str)
 
     STREAM_DELAY_MS = 25
 
@@ -125,6 +127,27 @@ class AnalysisWorker(QThread):
         self._csv_path = csv_path
         self._translator = translator
         self._language = language
+        #: None until the first report needs translating, then the settled answer.
+        self._translation_ready: Optional[bool] = None
+
+    def _can_translate(self) -> bool:
+        """Whether translation will really work, resolved once per run.
+
+        Asked on the first report that needs it rather than before the run, so a
+        corpus that is entirely in English never opens a socket, and asked here
+        rather than read from a flag the operator has to refresh by hand: a
+        translation that was never attempted is indistinguishable, in the filed
+        report, from one that was attempted and failed.
+        """
+        if self._translator is None:
+            return False
+        if self._translation_ready is None:
+            ready = bool(self._translator.ready())
+            reason = self._translator.status()
+            self._translation_ready = ready
+            self.translation_state.emit(ready, reason)
+            self.status.emit(reason)
+        return self._translation_ready
 
     def run(self) -> None:  # noqa: D102 - documented on the class
         try:
@@ -148,7 +171,7 @@ class AnalysisWorker(QThread):
                 if self.isInterruptionRequested():
                     break
                 translated, language = "", ""
-                if self._translator is not None and looks_non_latin(narrative):
+                if looks_non_latin(narrative) and self._can_translate():
                     self.status.emit(f"Translating report {index} to English")
                     translated = self._translator.translate(narrative)
                     language = self._language
@@ -716,8 +739,12 @@ class MainWindow(QMainWindow):
 
     def _analysis_worker(self, **kwargs) -> AnalysisWorker:
         self.duplicates_seen = 0
-        # Reachability is checked once, in the worker, not per repaint.
-        translator = self.llm if (self.translate_enabled and self.llm_online) else None
+        # Handed over whenever translation is switched on. Whether it can really
+        # work is settled inside the worker, on the first report that needs it -
+        # gating here on a flag only the "Check Ollama" button can set meant a
+        # fresh session silently analysed every non-English report as written,
+        # with a running, reachable Ollama sitting there unused.
+        translator = self.llm if self.translate_enabled else None
         return AnalysisWorker(self.pipeline, translator=translator, language=self.language,
                               parent=self, **kwargs)
 
@@ -1029,6 +1056,7 @@ class MainWindow(QMainWindow):
             worker.status.connect(self._set_status)
             worker.failed.connect(self.on_failed)
             worker.completed.connect(self.on_analysis_completed)
+            worker.translation_state.connect(self.on_translation_state)
         if isinstance(worker, ProbeWorker):
             worker.probed.connect(self.on_probed)
         worker.finished.connect(self._release_worker)
@@ -1136,6 +1164,22 @@ class MainWindow(QMainWindow):
             self.engines_view.set_llm_status(message, self.llm.models() if ok else ())
         self._set_status(message[:120])
         self.audit.system(f"{name} check", ok=ok, outcome=message[:160])
+        self._refresh_workflow()
+
+    def on_translation_state(self, ready: bool, reason: str) -> None:
+        """A run found out whether translation really works. Keep the answer.
+
+        This is the truth - it comes from an attempt, not from a probe someone
+        remembered to press - so it replaces whatever the map was showing and is
+        recorded either way. An operator whose reports came back untranslated can
+        then read why on the workflow map instead of guessing.
+        """
+        self.llm_online = ready
+        self.llm_message = reason
+        self.engines_view.set_llm_status(reason, self.llm.models() if ready else ())
+        self.audit.system("translation readiness", ok=ready, outcome=reason[:160])
+        if not ready:
+            LOGGER.warning("Translation unavailable: %s", reason)
         self._refresh_workflow()
 
     def on_trained(self, report: Dict[str, object]) -> None:

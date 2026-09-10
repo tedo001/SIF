@@ -30,7 +30,7 @@ working?" before you have to ask.
 | # | Do this | Where | You are done when |
 | --- | --- | --- | --- |
 | 1 | **Download / verify models** (workflow card 2) — the same control on the Engines page reads **Download / verify OCR models (once)** | Workflow card 2, or Engines page | Card 2 reads `PaddleOCR ready — models are on this machine … No download needed` |
-| 2 | **Start Ollama and pull a model**, then press **Check Ollama** on card 3 | A terminal: `ollama pull llama3.2` | Card 3 reads `Ollama ready — llama3.2` |
+| 2 | **Start Ollama and pull a model** | A terminal: `ollama pull llama3.2`, then `python -m sif.llm` to confirm | The check ends `Translation works`, and card 3 reads `Ollama ready — llama3.2` |
 
 > **Card 3 green means translation will actually run.** It checks that the
 > server answers *and* that the model you configured is pulled — a server that
@@ -165,7 +165,8 @@ the narrative.
    - `ENGLISH — TRANSLATED FROM TAMIL FOR REVIEW` → you are reading the English;
      **Show the original** is beside it.
    - `ENGLISH AS WRITTEN` → nothing to translate.
-   - `NOT TRANSLATED …` in red → **stop**. Start Ollama and re-analyse. A verdict
+   - `NOT TRANSLATED …` in red → **stop**. Run `python -m sif.llm`, fix what it
+     names, and re-analyse the document. A verdict
      on a narrative the engine could not read is a verdict about the language.
 3. Read **WHAT EACH ENGINE SAID** — rules, semantic, model, LLM, side by side.
 4. Decide with the keyboard:
@@ -262,7 +263,7 @@ then export.
 | --- | --- | --- |
 | Card 2 keeps saying models download | Cache empty, or `PADDLE_PDX_CACHE_HOME` moved | `python -m sif.ocr --list`, then `python -m sif.ocr en` |
 | Card 3 red, `not pulled` | Ollama running but the model is missing | Run `ollama list` to see what you actually have, then type that exact name into Engines → **Model** and press **Apply** |
-| Report shows a red NOT TRANSLATED bar | Analysed while Ollama was down, or with a model that was not pulled | Get card 3 green first, then **re-analyse the document** - translation happens at analysis time and is not applied retrospectively |
+| Report shows a red NOT TRANSLATED bar | Ollama was down, or the model was not pulled, **when that report was analysed** | Run `python -m sif.llm` - it says which of the two, and prints the exact command to fix it. Then **re-analyse the document**: translation happens at analysis time and is never applied retrospectively |
 | A report you expected to flag did not | The barrier phrasing may not be in the vocabulary | It still reaches the queue — confirm it there, and the label teaches the model |
 | Corpus counts look doubled | Older builds appended repeats | Fixed; **File → Clear the corpus** and re-import to reset |
 | `encoder: hashing` when you wanted the transformer | No network, or the model is not cached | Engines → Semantic encoder → *Transformer*, then re-analyse |

@@ -32,7 +32,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 __all__ = ["OllamaEngine", "LLMOpinion", "DEFAULT_HOST", "DEFAULT_MODEL",
            "looks_non_latin"]
@@ -295,3 +295,57 @@ class OllamaEngine:
             rationale=field_text("rationale", "reason", "explanation"),
             raw=body,
         )
+
+
+def _main(argv: Optional[Sequence[str]] = None) -> int:
+    """Say whether translation would work on this machine, and why not.
+
+    ``python -m sif.llm`` answers the question the console can only answer with
+    a red banner: is Ollama running, is the configured model actually pulled,
+    and does a translation come back. Each step prints its own verdict, so the
+    first FAILED line is the thing to fix.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=_main.__doc__.splitlines()[0])
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--text", default="பம்ப் நிலையத்தில் 11 கிலோ வோல்ட் ஊட்டி கேபிள்",
+                        help="sample non-English narrative to translate")
+    arguments = parser.parse_args(list(argv) if argv is not None else None)
+
+    engine = OllamaEngine(host=arguments.host, model=arguments.model)
+    print(f"\nSENTRA translation check - {engine.host}, model '{engine.model}'\n")
+
+    if not engine.available():
+        print(f"  server        FAILED - {engine.last_error}")
+        print(f"\nOllama is not answering at {engine.host}.")
+        print("Start it (`ollama serve`), then run this again.\n")
+        return 1
+    print("  server        ok - Ollama is answering")
+
+    installed = engine.models()
+    print(f"  models        {', '.join(installed) if installed else 'none pulled'}")
+    if not engine.has_model():
+        print(f"  model         FAILED - '{engine.model}' is not pulled")
+        print(f"\nRun: ollama pull {engine.model}")
+        if installed:
+            print(f"...or point SENTRA at one you have, on the Engines page: "
+                  f"{', '.join(installed[:4])}\n")
+        return 1
+    print(f"  model         ok - '{engine.model}' is pulled")
+
+    english = engine.translate(arguments.text)
+    if not english:
+        print(f"  translation   FAILED - {engine.last_error or 'empty reply'}")
+        print("\nThe model is pulled but returned nothing. Try a different model "
+              "on the Engines page.\n")
+        return 1
+    print(f"  translation   ok - {english[:70]}")
+    print("\nTranslation works. SENTRA will translate on the next analysis; "
+          "re-analyse the documents that show NOT TRANSLATED.\n")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - command-line entry point
+    raise SystemExit(_main())

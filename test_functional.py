@@ -471,5 +471,125 @@ class TestBuildOneStillWorks(unittest.TestCase):
                          "the review bench belongs to build 2 only")
 
 
+class _StubOllama:
+    """A local LLM that is reachable, or isn't, without a server."""
+
+    def __init__(self, usable: bool = True) -> None:
+        self._usable = usable
+        self.model = "llama3.2"
+        self.host = "http://localhost:11434"
+        self.translated: List[str] = []
+        self.readiness_checks = 0
+
+    def ready(self) -> bool:
+        self.readiness_checks += 1
+        return self._usable
+
+    def status(self) -> str:
+        return (f"Ollama ready at {self.host} - model '{self.model}'" if self._usable
+                else f"Ollama not reachable at {self.host} - start it with 'ollama serve'")
+
+    def models(self) -> List[str]:
+        return ["llama3.2:latest"] if self._usable else []
+
+    def translate(self, text: str) -> str:
+        self.translated.append(text)
+        return "Booster pump 11 kV feeder was earthed" if self._usable else ""
+
+
+#: A Tamil narrative, so ``looks_non_latin`` routes it to the translator.
+TAMIL_REPORT = ("பூஸ்டர் பம்பின் தடுப்பு பராமரிப்பின் போது 11 கிலோ வோல்ட் "
+                "ஊட்டி கேபிள் எர்த் செய்யப்படவில்லை")
+
+
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestTranslationWithoutAManualProbe(unittest.TestCase):
+    """Translation must not depend on anyone having pressed "Check Ollama".
+
+    The defect this pins down: ``llm_online`` started False on every launch and
+    was only ever set by the manual probe, while the analysis worker took its
+    translator from that flag. A running, reachable Ollama therefore sat unused
+    and every non-English report was filed "NOT TRANSLATED - ... START OLLAMA",
+    telling the operator to start something that was already running.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def setUp(self) -> None:
+        import main2
+
+        self.window = main2.MainWindow()
+        self.addCleanup(self.window.close)
+
+    def _analyse(self, text: str) -> None:
+        self.window._start(self.window._analysis_worker(texts=[text],
+                                                        references=["DOC-001"]))
+        self.assertTrue(self.window.worker.wait(120_000), "analysis did not finish")
+        self.app.processEvents()
+
+    def test_a_fresh_session_translates_with_no_probe_first(self) -> None:
+        stub = _StubOllama(usable=True)
+        self.window.llm = stub
+        self.assertFalse(self.window.llm_online,
+                         "a fresh session has probed nothing - that is the whole point")
+
+        self._analyse(TAMIL_REPORT)
+
+        self.assertEqual(stub.translated, [TAMIL_REPORT],
+                         "the report was never even handed to the translator")
+        self.assertTrue(self.window.rows[0]["translated_text"],
+                        "an English rendering must reach the review bench")
+        self.assertTrue(self.window.llm_online,
+                        "readiness learned from a real attempt must be kept")
+
+    def test_an_unreachable_host_is_named_rather_than_left_silent(self) -> None:
+        stub = _StubOllama(usable=False)
+        self.window.llm = stub
+
+        self._analyse(TAMIL_REPORT)
+
+        self.assertEqual(self.window.rows[0]["translated_text"], "",
+                         "nothing may be passed off as a translation")
+        self.assertFalse(self.window.llm_online)
+        self.assertIn("not reachable", self.window.llm_message,
+                      "the map must carry the real reason, not 'not checked yet'")
+
+    def test_an_english_corpus_never_asks_the_translator_anything(self) -> None:
+        """Readiness is resolved lazily, so an English corpus opens no socket."""
+        stub = _StubOllama(usable=True)
+        self.window.llm = stub
+
+        self._analyse("No harness worn while working at 6 m on the scaffold; "
+                      "the lanyard was clipped to the handrail.")
+
+        self.assertEqual(stub.readiness_checks, 0)
+        self.assertEqual(stub.translated, [])
+
+    def test_readiness_is_settled_once_per_run_not_once_per_report(self) -> None:
+        stub = _StubOllama(usable=True)
+        self.window.llm = stub
+
+        self.window._start(self.window._analysis_worker(
+            texts=[TAMIL_REPORT, TAMIL_REPORT + " மீண்டும்", TAMIL_REPORT + " மூன்று"],
+            references=["DOC-001", "DOC-002", "DOC-003"]))
+        self.assertTrue(self.window.worker.wait(120_000), "analysis did not finish")
+        self.app.processEvents()
+
+        self.assertEqual(stub.readiness_checks, 1)
+        self.assertEqual(len(stub.translated), 3)
+
+    def test_switching_translation_off_is_still_honoured(self) -> None:
+        stub = _StubOllama(usable=True)
+        self.window.llm = stub
+        self.window.set_translation(False)
+
+        self._analyse(TAMIL_REPORT)
+
+        self.assertEqual(stub.readiness_checks, 0)
+        self.assertEqual(self.window.rows[0]["translated_text"], "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
