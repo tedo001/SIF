@@ -971,6 +971,41 @@ class TestReviewBench(unittest.TestCase):
         main2.QMessageBox.information, main2.QMessageBox.warning = self._real_boxes
         self.window.close()
 
+    def test_every_case_opens_with_a_plain_english_brief(self) -> None:
+        """A reviewer must never have to assemble the verdict themselves.
+
+        The raw narrative can be anything the extractor found - including a page
+        header lifted out of a PDF - so the brief, built from verified fields, is
+        what the bench leads with.
+        """
+        self.window.select_review_row(0)
+        brief = self.window.review_view.brief.text()
+
+        self.assertIn("R-1", brief)
+        self.assertIn("fatal potential", brief)
+        self.assertIn("Energy Isolation", brief)
+        self.assertIn("95", brief, "the risk score belongs in the brief")
+        self.assertNotIn("*", brief, "markdown would render literally in a label")
+
+    def test_a_report_with_no_fatal_potential_does_not_claim_one(self) -> None:
+        self.window.select_review_row(2)
+        brief = self.window.review_view.brief.text()
+
+        self.assertNotIn("fatal potential", brief)
+        self.assertIn("R-3", brief)
+
+    def test_the_brief_omits_fields_the_report_never_stated(self) -> None:
+        """"Location not stated" is honest in a column and noise in a sentence."""
+        from sif.narrative import plain_brief
+
+        brief = plain_brief(dict(reference="R-9", sif_potential=False,
+                                 iogp_rule="Unclassified / General HSE",
+                                 risk_score=0.0, risk_band="Low",
+                                 activity="Unspecified activity",
+                                 location="Location not stated"))
+        self.assertNotIn("Location not stated", brief)
+        self.assertNotIn("Unspecified activity", brief)
+
     def _grow_corpus(self, copies: int = 4) -> None:
         """Repeat the three fixtures so the corpus is big enough to train on."""
         base = list(self.window.rows)

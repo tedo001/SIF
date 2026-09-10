@@ -444,8 +444,8 @@ class TestNarrativeGeneration(unittest.TestCase):
                     risk_band="Critical", reference="T-1")
         flagged = PipelineResult(**base, minimizing_language=True)
         plain = PipelineResult(**base, minimizing_language=False)
-        self.assertIn("downplays", self.report_brief(flagged))
-        self.assertNotIn("downplays", self.report_brief(plain))
+        self.assertIn("plays this down", self.report_brief(flagged))
+        self.assertNotIn("plays this down", self.report_brief(plain))
 
     def test_translation_is_disclosed_when_the_report_was_translated(self) -> None:
         from sif.pipeline import PipelineResult

@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from sif.narrative import plain_brief
 from ui2.components import scrollable
 from ui.charts import DonutChart, HBarChart
 from ui.components import DataTable, FieldRow, KpiTile, Panel, Pill
@@ -329,6 +330,13 @@ class ReportView(QWidget):
 
         self.reference = QLabel("-")
         self.reference.setObjectName("Muted")
+        # Same plain brief the review bench leads with, so a report reads the
+        # same way wherever it is opened.
+        self.brief = QLabel("-")
+        self.brief.setWordWrap(True)
+        self.brief.setStyleSheet(
+            f"background-color: {C.PANEL_ALT}; border: 1px solid {C.BORDER};"
+            "border-radius: 9px; padding: 10px 12px; font-size: 13px;")
         self.narrative = QTextEdit()
         self.narrative.setReadOnly(True)
         self.narrative.setFixedHeight(104)
@@ -348,8 +356,16 @@ class ReportView(QWidget):
         self.evidence.setReadOnly(True)
         self.evidence.setPlaceholderText("Evidence and reasoning appear here.")
 
+        brief_caption = QLabel("IN PLAIN ENGLISH")
+        brief_caption.setObjectName("Caption")
+        filed_caption = QLabel("THE REPORT AS FILED")
+        filed_caption.setObjectName("Caption")
+
         detail.body.addLayout(pills)
         detail.add(self.reference)
+        detail.add(brief_caption)
+        detail.add(self.brief)
+        detail.add(filed_caption)
         detail.add(self.narrative)
         for field in self.fields.values():
             detail.add(field)
@@ -371,6 +387,7 @@ class ReportView(QWidget):
             self.risk.setText("Risk: -")
             self.risk.set_colour(C.TEXT_DIM)
             self.reference.setText("-")
+            self.brief.setText("Select a report to read it here.")
             self.narrative.clear()
             self.evidence.clear()
             for field in self.fields.values():
@@ -386,6 +403,7 @@ class ReportView(QWidget):
         self.reference.setText(str(result.get("reference") or "unreferenced report"))
         # English is what was analysed and what a reviewer reads; the original
         # stays in the evidence panel below, which is the audit record.
+        self.brief.setText(plain_brief(result))
         english = str(result.get("translated_text", ""))
         language = str(result.get("source_language", "")) or "another language"
         self.narrative.setPlainText(english or str(result.get("raw_text", "")))

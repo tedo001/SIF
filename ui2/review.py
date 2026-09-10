@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from sif.llm import looks_non_latin
+from sif.narrative import plain_brief
 from ui.components import DataTable, FieldRow, Panel, Pill
 from ui2.components import scrollable
 from ui.theme import BAND_COLORS, C
@@ -209,6 +210,21 @@ class ReviewView(QWidget):
         language_row.addWidget(self.language_note, stretch=1)
         language_row.addWidget(self.original_button)
 
+        # The plain brief leads, and the report's own words follow it. A
+        # reviewer opening a case should not have to assemble "could this have
+        # killed someone" out of a rule name, a number and a raw paragraph -
+        # least of all when the raw paragraph turns out to be a page header the
+        # extractor picked up.
+        self.brief_caption = QLabel("IN PLAIN ENGLISH")
+        self.brief_caption.setObjectName("Caption")
+        self.brief = QLabel("-")
+        self.brief.setWordWrap(True)
+        self.brief.setStyleSheet(
+            f"background-color: {C.PANEL_ALT}; border: 1px solid {C.BORDER};"
+            "border-radius: 9px; padding: 10px 12px; font-size: 13px;")
+
+        self.narrative_caption = QLabel("THE REPORT AS FILED")
+        self.narrative_caption.setObjectName("Caption")
         self.narrative = QTextEdit()
         self.narrative.setReadOnly(True)
         self.narrative.setFixedHeight(92)
@@ -237,6 +253,9 @@ class ReviewView(QWidget):
         case_layout.addLayout(pills)
         case_layout.addWidget(self.reference)
         case_layout.addWidget(self.reason)
+        case_layout.addWidget(self.brief_caption)
+        case_layout.addWidget(self.brief)
+        case_layout.addWidget(self.narrative_caption)
         case_layout.addLayout(language_row)
         case_layout.addWidget(self.narrative)
         for row in self.fields.values():
@@ -357,6 +376,7 @@ class ReviewView(QWidget):
             self.reference.setText("-")
             self.reason.setText("Select a report from the queue.")
             self._original = self._english = self._source_language = ""
+            self.brief.setText("Select a report from the queue.")
             self.narrative.clear()
             self.language_note.setText("-")
             self.original_button.setChecked(False)
@@ -387,6 +407,7 @@ class ReviewView(QWidget):
         else:
             self.reason.setText(reason or "Queued for verification.")
 
+        self.brief.setText(plain_brief(result))
         self._original = str(result.get("raw_text", ""))
         self._english = str(result.get("translated_text", ""))
         self._source_language = str(result.get("source_language", ""))

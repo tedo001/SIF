@@ -29,12 +29,15 @@ Two entry points:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
+
+from .lexical import (NO_BARRIER_FAILURE, NO_ENERGY, UNKNOWN_ACTIVITY,
+                      UNKNOWN_LOCATION)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .pipeline import Intelligence, PipelineResult
 
-__all__ = ["report_brief", "corpus_bulletin"]
+__all__ = ["report_brief", "plain_brief", "corpus_bulletin"]
 
 #: Every generated document carries this - the console's own description of
 #: itself, not a claim about what the reader should do with the output.
@@ -45,43 +48,92 @@ _DISCLAIMER = "Prototype output - for review, not a statutory record."
 _MAX_LISTED_ITEMS = 10
 
 
-def report_brief(result: "PipelineResult") -> str:
-    """One paragraph on a single report, for handing to someone else.
+#: Placeholders the extractors use when a field could not be filled. They are
+#: honest in a table column and noise in a sentence, so a brief drops them.
+_UNSAID = {UNKNOWN_ACTIVITY.lower(), UNKNOWN_LOCATION.lower(),
+           NO_BARRIER_FAILURE.lower(), NO_ENERGY.lower(), "-", ""}
 
-    Built entirely from fields the pipeline already populated - nothing here is
-    inferred fresh, so the brief can never say something the structured record
-    does not already support.
+
+def _lead_lower(text: str) -> str:
+    """Lowercase only the first letter, so LOTO and PTW survive mid-sentence."""
+    return text[:1].lower() + text[1:] if text else text
+
+
+def _said(fields: Mapping[str, object], key: str) -> str:
+    """One field, or '' when it holds a not-stated placeholder."""
+    value = str(fields.get(key) or "").strip()
+    return "" if value.lower() in _UNSAID else value
+
+
+def plain_brief(fields: Mapping[str, object]) -> str:
+    """A short brief on one report, in the words an HSE reader would use.
+
+    Short sentences, no jargon the reader has to decode, and the consequence
+    first: someone deciding whether a report could have killed a person should
+    not have to infer that from a rule name and a number. What follows is the
+    reasoning behind it, then whatever the report did not say is simply left
+    out rather than printed as "not stated".
+
+    Takes a mapping rather than a :class:`~sif.pipeline.PipelineResult` so the
+    interface can hand a table row straight in; :func:`report_brief` adapts a
+    result onto it, which keeps one wording for both callers.
+
+    Templated, never model-written: every clause is a field the pipeline
+    already extracted, so nothing in the brief can outrun the record.
     """
-    reference = result.reference or "This report"
-    if not result.iogp_rule:
+    reference = str(fields.get("reference") or "").strip() or "This report"
+    rule = str(fields.get("iogp_rule") or "").strip()
+    if not rule:
         return f"{reference}: no text was extracted - nothing to summarise."
 
-    if result.sif_potential:
-        lines = [
-            f"{reference} carries **fatal potential** under {result.iogp_rule} "
-            f"(risk {result.risk_score:.0f}/100, {result.risk_band} band): "
-            f"{result.energy_source or 'a high-energy source'} was uncontrolled "
-            f"because {(result.barrier_failure or 'a critical barrier').lower()}."
-        ]
-        if result.minimizing_language:
-            lines.append(
-                "The report's own wording downplays this - the finding rests on "
-                "the extracted facts, not the tone.")
-    else:
-        lines = [f"{reference}: classified under {result.iogp_rule}, "
-                 f"risk {result.risk_score:.0f}/100 ({result.risk_band} band)."]
-        if result.high_energy and not result.barrier_failed:
-            lines.append(
-                f"{result.energy_source or 'A high-energy source'} was present with "
-                "no failed barrier recognised - controlled work, or a barrier "
-                "described in words the system has not yet learned.")
+    energy = _said(fields, "energy_source")
+    barrier = _said(fields, "barrier_failure")
+    try:
+        risk = float(fields.get("risk_score") or 0.0)
+    except (TypeError, ValueError):
+        risk = 0.0
+    band = str(fields.get("risk_band") or "Low").strip()
 
-    if result.needs_review:
-        lines.append(f"Queued for review: {result.review_reason}")
-    if result.source_language:
-        lines.append(f"Translated from {result.source_language} for analysis; the "
-                     "original wording is kept as the record.")
+    lines = []
+    if fields.get("sif_potential"):
+        lines.append(f"{reference} carries fatal potential: someone could have been "
+                     "killed or seriously hurt.")
+        if energy and barrier:
+            lines.append(f"{energy} was uncontrolled because {_lead_lower(barrier)}.")
+        elif barrier:
+            lines.append(f"A critical control failed: {_lead_lower(barrier)}.")
+        elif energy:
+            lines.append(f"{energy} was present and not adequately controlled.")
+    else:
+        lines.append(f"{reference}: no serious-injury or fatality precursor was found.")
+        if fields.get("high_energy") and not fields.get("barrier_failed"):
+            lines.append(f"{energy or 'A high-energy source'} was present, but no failed "
+                         "control was recognised - either the work was controlled, or the "
+                         "barrier is described in words the system has not learned yet.")
+
+    lines.append(f"Rule: {rule}. Risk {risk:.0f} out of 100 ({band} band).")
+
+    context = [part for part in (_said(fields, "activity"), _said(fields, "location")) if part]
+    if context:
+        lines.append("Seen during " + " at ".join(context) + "."
+                     if len(context) == 2 else f"Seen during {context[0]}.")
+
+    if fields.get("minimizing_language"):
+        lines.append("The report plays this down in its own words. The finding rests on "
+                     "the facts above, not on how it was written.")
+    language = str(fields.get("source_language") or "").strip()
+    if language:
+        lines.append(f"Translated from {language} for analysis; the original wording "
+                     "stays the record.")
+    if fields.get("needs_review"):
+        reason = str(fields.get("review_reason") or "").strip()
+        lines.append(f"A person still has to check this{': ' + reason if reason else '.'}")
     return " ".join(lines)
+
+
+def report_brief(result: "PipelineResult") -> str:
+    """The same brief, for a :class:`~sif.pipeline.PipelineResult`."""
+    return plain_brief(result.to_dict())
 
 
 def corpus_bulletin(intelligence: "Intelligence", results: Sequence["PipelineResult"],
