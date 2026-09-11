@@ -93,7 +93,22 @@ def build_window():
     window = MainWindow()
     window.setStyleSheet(gov_theme.STYLESHEET)
     window.setWindowTitle(WINDOW_TITLE)
+    _strip_header_ornament(window)
     return window
+
+
+def _strip_header_ornament(window) -> None:
+    """Take the mark, the avatar and the search box out of the header.
+
+    Hidden here rather than removed from :class:`ui2.components.HeaderBar`,
+    because that header belongs to both builds and app2.py keeps all three.
+
+    The search box is the only one that did anything - it filtered the reports
+    table - so this build trades that filter for a quieter header. The reports
+    are all still reachable; they just cannot be narrowed from up here.
+    """
+    for widget in (window.header.mark, window.header.avatar, window.header.search):
+        widget.hide()
 
 
 def main(argv: list[str] | None = None) -> int:

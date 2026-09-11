@@ -686,6 +686,27 @@ class TestDeepNavyBuild(unittest.TestCase):
                 area.widget().width(), area.viewport().width() + 1,
                 "a field value has pushed the case wider than the pane holding it")
 
+    def test_the_header_ornament_is_stripped_here_but_not_in_the_other_build(self) -> None:
+        """The mark, avatar and search box are hidden for this build only."""
+        import app
+        import main2
+
+        navy = app.build_window()
+        self.addCleanup(navy.close)
+        navy.show()
+        self.app.processEvents()
+        for name in ("mark", "avatar", "search"):
+            self.assertTrue(getattr(navy.header, name).isHidden(),
+                            f"{name} should be hidden in the deep-navy build")
+
+        blue = main2.MainWindow()
+        self.addCleanup(blue.close)
+        blue.show()
+        self.app.processEvents()
+        for name in ("mark", "avatar", "search"):
+            self.assertFalse(getattr(blue.header, name).isHidden(),
+                             f"app2.py must keep its {name}")
+
     def test_the_two_builds_are_told_apart_in_the_title_bar(self) -> None:
         import app
 

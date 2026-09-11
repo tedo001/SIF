@@ -230,7 +230,8 @@ class HeaderBar(QFrame):
 
         # "S" rather than a glyph: an ASCII letter is on every machine, which a
         # pictograph is not, and this mark has to survive a plant workstation.
-        mark = QLabel("S")
+        self.mark = QLabel("S")
+        mark = self.mark
         mark.setFixedSize(30, 30)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setStyleSheet(
@@ -266,7 +267,8 @@ class HeaderBar(QFrame):
         self.engine_label.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         initials = "".join(part[0] for part in user_name.split()[:2]).upper() or "HSE"
-        avatar = QLabel(initials)
+        self.avatar = QLabel(initials)
+        avatar = self.avatar
         avatar.setFixedSize(34, 34)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setStyleSheet(
