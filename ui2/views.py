@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,7 +29,6 @@ from ui.charts import DonutChart, HBarChart
 from ui.components import DataTable, FieldRow, KpiTile, Panel, Pill
 from ui.theme import BAND_COLORS, C
 from ui.views import (
-    DOCUMENT_COLUMNS,
     IMPORTANCE_COLUMNS,
     LOG_COLUMNS,
     MATRIX_COLUMNS,
@@ -38,6 +37,22 @@ from ui.views import (
 
 __all__ = ["DashboardView", "IngestView", "EnginesView", "SettingsView",
            "ReportView", "scrollable", "AUDIT_COLUMNS"]
+
+#: The extracted-document table with its per-row controls. The controls sit
+#: second rather than last: the full column set is wider than the panel, so a
+#: trailing Actions column lands behind the horizontal scroll bar, and a button
+#: the operator has to go looking for is not an accessible button. The
+#: remaining widths are trimmed to keep the scroll as short as possible.
+DOCUMENT_ACTION_COLUMNS: Sequence[Tuple[str, str, int]] = (
+    ("File", "name", 210),
+    ("Actions", "_actions", 232),
+    ("Backend", "backend", 112),
+    ("Pages", "pages", 62),
+    ("OCR confidence", "confidence", 112),
+    ("Characters", "characters", 92),
+    ("Blocks", "blocks", 70),
+    ("Notes", "note", 260),
+)
 
 AUDIT_COLUMNS: Sequence[Tuple[str, str, int]] = (
     ("Time", "when", 158),
@@ -163,6 +178,10 @@ class IngestView(QWidget):
     files_requested = pyqtSignal()
     analyse_documents_requested = pyqtSignal()
     clear_requested = pyqtSignal()
+    #: Each carries the row index of the document the operator acted on.
+    document_preview_requested = pyqtSignal(int)
+    document_analyse_requested = pyqtSignal(int)
+    document_removed = pyqtSignal(int)
     language_changed = pyqtSignal(str)
     translate_toggled = pyqtSignal(bool)
 
@@ -180,7 +199,7 @@ class IngestView(QWidget):
         top.addWidget(self._build_text_panel(), stretch=3)
         top.addWidget(self._build_document_panel(languages, unsupported), stretch=4)
 
-        self.document_table = DataTable(DOCUMENT_COLUMNS)
+        self.document_table = DataTable(DOCUMENT_ACTION_COLUMNS)
         documents = Panel("Extracted documents")
         documents.add(self.document_table, stretch=1)
 
@@ -280,7 +299,31 @@ class IngestView(QWidget):
         panel.add(run)
         panel.add(clear)
         self.document_buttons = [add, run, clear]
+        for button in self.document_buttons:
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
         return panel
+
+    def _row_actions(self, index: int) -> QWidget:
+        """The per-document controls that sit in the table's Actions column."""
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+        for label, signal, tip in (
+                ("Preview", self.document_preview_requested,
+                 "Show this document's extracted text in the preview panel"),
+                ("Analyse", self.document_analyse_requested,
+                 "Analyse only the blocks that came from this document"),
+                ("Remove", self.document_removed,
+                 "Drop this document and its blocks without touching the others")):
+            button = QPushButton(label)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(tip)
+            button.setStyleSheet("padding: 3px 10px; font-size: 11.5px;")
+            button.clicked.connect(lambda _checked, i=index, s=signal: s.emit(i))
+            layout.addWidget(button)
+        layout.addStretch(1)
+        return holder
 
     def set_busy(self, busy: bool) -> None:
         for button in self.text_buttons + self.document_buttons:
@@ -296,6 +339,13 @@ class IngestView(QWidget):
 
     def set_documents(self, rows) -> None:
         self.document_table.set_rows(rows)
+        # Put the controls on the row they act on. Reaching a document through
+        # the whole-list buttons above means guessing which one you are about
+        # to clear; naming it on its own line removes the guess.
+        column = next(i for i, (_, key, _) in enumerate(DOCUMENT_ACTION_COLUMNS)
+                      if key == "_actions")
+        for index in range(len(rows)):
+            self.document_table.setCellWidget(index, column, self._row_actions(index))
 
     def set_preview(self, text: str) -> None:
         self.preview.setPlainText(text)

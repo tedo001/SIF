@@ -146,14 +146,18 @@ QLabel#Faint {{ color: {C.TEXT_FAINT}; font-size: 11.5px; }}
 QLabel#KpiValue {{ font-size: 30px; font-weight: 700; }}
 QLabel#KpiUnit {{ font-size: 12px; color: {C.TEXT_DIM}; }}
 
+/* A secondary button still has to read as a button. Without an explicit text
+   colour and a visible edge it sat dim against the panel and looked disabled
+   next to the primary one, so operators stopped trying to press it. */
 QPushButton {{
     background-color: {C.CARD};
-    border: 1px solid {C.BORDER};
+    border: 1px solid {C.SCROLL_THUMB};
     border-radius: 9px;
     padding: 9px 14px;
     font-weight: 600;
+    color: {C.TEXT};
 }}
-QPushButton:hover {{ background-color: #1e3a58; }}
+QPushButton:hover {{ background-color: #1e3a58; border-color: {C.ACCENT}; }}
 QPushButton:pressed {{ background-color: #142a42; }}
 QPushButton:disabled {{ color: {C.TEXT_FAINT}; border-color: {C.BORDER_SOFT}; }}
 QPushButton#Primary {{

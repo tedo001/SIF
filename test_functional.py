@@ -471,6 +471,191 @@ class TestBuildOneStillWorks(unittest.TestCase):
                          "the review bench belongs to build 2 only")
 
 
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestExtractedDocumentActions(unittest.TestCase):
+    """Each extracted document carries its own Preview, Analyse and Remove."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def setUp(self) -> None:
+        import main2
+
+        # A modal dialog never returns in a headless run - it hangs the suite
+        # rather than failing it - so record the call instead of showing one.
+        self._boxes = (main2.QMessageBox.information, main2.QMessageBox.warning)
+        main2.QMessageBox.information = lambda *args, **kw: None
+        main2.QMessageBox.warning = lambda *args, **kw: None
+        self.addCleanup(self._restore_boxes)
+
+        self.window = main2.MainWindow()
+        self.addCleanup(self.window.close)
+        self.window.show()
+        self.app.processEvents()
+        for name, text in (
+                ("first.txt", "A scaffold at six metres with no harness anchored.\n\n"
+                              "An 11 kV feeder left ungrounded with no LOTO applied."),
+                ("second.pdf", "A confined space entry with no gas test carried out.")):
+            self.window.on_document_ready(
+                {"name": name, "backend": "text", "pages": 1, "confidence": None,
+                 "characters": len(text), "blocks": 2, "note": "-", "text": text})
+        self.app.processEvents()
+
+    def _restore_boxes(self) -> None:
+        import main2
+
+        main2.QMessageBox.information, main2.QMessageBox.warning = self._boxes
+
+    def test_the_controls_sit_on_the_row_and_are_not_hidden_off_the_edge(self) -> None:
+        from ui2.views import DOCUMENT_ACTION_COLUMNS
+
+        table = self.window.ingest_view.document_table
+        column = next(index for index, (_, key, _) in enumerate(DOCUMENT_ACTION_COLUMNS)
+                      if key == "_actions")
+        self.assertLess(column, 3, "the controls must not sit behind a horizontal scroll")
+
+        for row in range(table.rowCount()):
+            holder = table.cellWidget(row, column)
+            self.assertIsNotNone(holder, f"row {row} has no controls")
+            labels = [child.text() for child in holder.children()
+                      if hasattr(child, "text") and child.text()]
+            self.assertEqual(labels, ["Preview", "Analyse", "Remove"])
+
+    def test_preview_shows_the_document_whose_button_was_pressed(self) -> None:
+        self.window.preview_document(1)
+        self.app.processEvents()
+        self.assertIn("confined space",
+                      self.window.ingest_view.preview.toPlainText().lower())
+
+    def test_remove_drops_only_that_document_and_its_blocks(self) -> None:
+        self.assertEqual(len(self.window.pending_blocks), 3)
+
+        self.window.remove_document(0)
+        self.app.processEvents()
+
+        self.assertEqual([d["name"] for d in self.window.documents], ["second.pdf"])
+        self.assertEqual(len(self.window.pending_blocks), 1,
+                         "removing one document must not strand the other's blocks")
+
+    def test_analysing_one_document_analyses_only_its_blocks(self) -> None:
+        self.window.analyse_document(1)
+        self.assertTrue(self.window.worker.wait(120_000))
+        self.app.processEvents()
+
+        self.assertEqual(len(self.window.rows), 1)
+        self.assertIn("confined space", self.window.rows[0]["raw_text"].lower())
+
+
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestHotspotsPage(unittest.TestCase):
+    """The hotspots page says why it is empty instead of showing a blank grid."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def setUp(self) -> None:
+        import main2
+
+        self._boxes = (main2.QMessageBox.information, main2.QMessageBox.warning)
+        main2.QMessageBox.information = lambda *args, **kw: None
+        main2.QMessageBox.warning = lambda *args, **kw: None
+
+    def tearDown(self) -> None:
+        import main2
+
+        main2.QMessageBox.information, main2.QMessageBox.warning = self._boxes
+
+    def test_an_empty_page_explains_itself_and_does_not_repeat_its_title(self) -> None:
+        import main2
+
+        window = main2.MainWindow()
+        self.addCleanup(window.close)
+        window.navigate("hotspots")
+        self.app.processEvents()
+
+        # isHidden(), not isVisible(): the latter is false for any page that is
+        # not the current one in the stack, whatever this page asked for.
+        self.assertTrue(window.hotspot_view.table.isHidden(),
+                        "an empty grid reads as a broken page")
+        note = window.hotspot_view._empty_note
+        self.assertFalse(note.isHidden())
+        self.assertIn("at least two", note.text())
+        # titled() supplies the page heading; the panel must not repeat it.
+        from PyQt6.QtWidgets import QLabel
+
+        repeated = [label for label in window.hotspot_view.panel.findChildren(QLabel)
+                    if label.objectName() == "SectionTitle"]
+        self.assertEqual(repeated, [], "the page heading is shown twice")
+
+    def test_the_table_comes_back_once_there_are_hotspots(self) -> None:
+        from main import read_csv_reports
+        import main2
+
+        window = main2.MainWindow()
+        self.addCleanup(window.close)
+        window.show()
+        self.app.processEvents()
+        narratives, references = read_csv_reports(CSV_SAMPLE)
+        window._start(window._analysis_worker(texts=narratives, references=references))
+        self.assertTrue(window.worker.wait(180_000))
+        self.app.processEvents()
+
+        self.assertGreater(window.hotspot_view.table.rowCount(), 0)
+        self.assertFalse(window.hotspot_view.table.isHidden())
+        self.assertTrue(window.hotspot_view._empty_note.isHidden())
+
+
+@unittest.skipUnless(HAS_PYQT, "PyQt6 is not installed")
+class TestImportSpeed(unittest.TestCase):
+    """Importing a corpus must cost about what analysing it costs.
+
+    The engine analyses a report in roughly 3ms. The console around it used to
+    add ~90ms on top of every one - a 25ms sleep put there to make rows stream
+    visibly, plus a full re-aggregation and chart repaint every fifth row, plus
+    a scroll-to-bottom that laid the table out again each time. None of that is
+    analysis, and on a real shift's corpus it was the whole wait.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _application()
+
+    def test_the_console_adds_little_to_the_cost_of_analysis(self) -> None:
+        import time
+
+        from main import read_csv_reports
+        import main2
+
+        narratives, _ = read_csv_reports(CSV_SAMPLE)
+        texts = [f"{text} Distinct marker {index}."
+                 for index, text in enumerate(narratives * 6)]
+        references = [f"SPEED-{index}" for index in range(len(texts))]
+
+        window = main2.MainWindow()
+        self.addCleanup(window.close)
+        window.show()
+        self.app.processEvents()
+
+        # One warm run first: the encoder resolves once per process, and that
+        # cost belongs to start-up rather than to the import being measured.
+        window._start(window._analysis_worker(texts=texts[:6], references=references[:6]))
+        self.assertTrue(window.worker.wait(180_000))
+        self.app.processEvents()
+
+        started = time.perf_counter()
+        window._start(window._analysis_worker(texts=texts, references=references))
+        self.assertTrue(window.worker.wait(180_000), "import did not finish")
+        self.app.processEvents()
+        per_report = (time.perf_counter() - started) / len(texts) * 1000
+
+        self.assertEqual(len(window.rows), len(texts))
+        self.assertLess(per_report, 40,
+                        f"{per_report:.0f}ms a report - the console is adding more "
+                        "than the analysis costs")
+
+
 class _StubOllama:
     """A local LLM that is reachable, or isn't, without a server."""
 

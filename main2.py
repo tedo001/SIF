@@ -22,6 +22,7 @@ import logging
 import os
 from collections import Counter
 from datetime import datetime
+from time import monotonic
 from typing import Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -118,7 +119,10 @@ class AnalysisWorker(QThread):
     #: ``(usable, reason)`` the first time a report actually needs translating.
     translation_state = pyqtSignal(bool, str)
 
-    STREAM_DELAY_MS = 25
+    #: Rows used to be paced by a 25ms sleep so they visibly streamed in. On a
+    #: corpus of any size that is the single largest cost in the run - 25ms a
+    #: report against 2.5ms of actual analysis - and it bought nothing a
+    #: progress bar does not already show.
 
     def __init__(self, pipeline: SIFPipeline, texts: Optional[Sequence[str]] = None,
                  csv_path: Optional[str] = None, references: Optional[Sequence[str]] = None,
@@ -182,14 +186,18 @@ class AnalysisWorker(QThread):
                     if not translated:
                         self.status.emit(
                             f"Translation unavailable for report {index} - analysing as written")
+                if self._pipeline.has_llm:
+                    # A local model reading a report takes seconds, not
+                    # milliseconds. Say so, or the window looks hung.
+                    self.status.emit(
+                        f"Report {index} of {len(pairs)} - asking the local model "
+                        f"(slowest step; switch it off on the Engines page to skip it)")
                 result = self._pipeline.analyze(narrative, reference, translated, language)
                 payload = result.to_dict()
                 payload["_timestamp"] = datetime.now().strftime("%H:%M:%S")
                 self.row_ready.emit(payload)
                 emitted += 1
                 self.progress.emit(index, len(pairs))
-                if self.STREAM_DELAY_MS:
-                    self.msleep(self.STREAM_DELAY_MS)
             self.completed.emit(emitted)
         except Exception as exc:  # pragma: no cover - defensive GUI guard
             LOGGER.exception("Analysis failed")
@@ -421,6 +429,9 @@ class MainWindow(QMainWindow):
         self.llm_online = False
         self.llm_message = "not checked yet"
         self.translate_enabled = True
+        #: When the streaming dashboard refresh last ran, so a long import
+        #: repaints on a clock rather than once per N rows.
+        self._last_refresh = 0.0
         self.language = LANGUAGE_CHOICES[0]
 
         self.updater = UpdateChecker()
@@ -485,7 +496,12 @@ class MainWindow(QMainWindow):
             "Risk hotspots",
             "Sites, activities, rule-at-location repeats and barrier failures occurring "
             "more than once, ranked by SIF-precursor density.",
-            HOTSPOT_COLUMNS)
+            HOTSPOT_COLUMNS, heading=False,
+            empty_note="No hotspots yet. A hotspot is a repeat, so one needs at least "
+                       "two reports that share a site, an activity, a rule-at-location "
+                       "or a failed barrier. Analyse more of the corpus and they appear "
+                       "here, ranked by how dense the precursors are rather than by how "
+                       "many reports the group happens to hold.")
         self.review_view = ReviewView()
         self.review_view.set_reviewer(str(prefs.get("reviewer", "") or ""))
         self.analytics_view = AnalyticsView()
@@ -600,6 +616,9 @@ class MainWindow(QMainWindow):
         self.ingest_view.clear_requested.connect(self.clear_documents)
         self.ingest_view.language_changed.connect(self.change_language)
         self.ingest_view.translate_toggled.connect(self.set_translation)
+        self.ingest_view.document_preview_requested.connect(self.preview_document)
+        self.ingest_view.document_analyse_requested.connect(self.analyse_document)
+        self.ingest_view.document_removed.connect(self.remove_document)
 
         self.report_view.row_selected.connect(self.select_row)
 
@@ -770,9 +789,52 @@ class MainWindow(QMainWindow):
                                     "Add documents first - no extracted text is waiting.")
             return
         blocks = list(self.pending_blocks)
+        for document in self.documents:
+            document["_blocks"] = []
         self.pending_blocks.clear()
         references = [f"DOC-{number:03d}" for number in range(1, len(blocks) + 1)]
         self._start(self._analysis_worker(texts=blocks, references=references))
+
+    def _sync_pending_blocks(self) -> None:
+        """Rebuild the waiting blocks from the documents that are still listed."""
+        self.pending_blocks = [block for document in self.documents
+                               for block in document.get("_blocks", [])]
+
+    def preview_document(self, index: int) -> None:
+        """Show one document's extracted text, whichever row was pressed."""
+        if 0 <= index < len(self.documents):
+            document = self.documents[index]
+            self.ingest_view.set_preview(str(document.get("_text", ""))[:6000])
+            self._set_status(f"Showing the text extracted from {document.get('name', '')}")
+
+    def analyse_document(self, index: int) -> None:
+        """Analyse only the blocks that came from one document."""
+        if not 0 <= index < len(self.documents):
+            return
+        document = self.documents[index]
+        blocks = list(document.get("_blocks", []))
+        if not blocks:
+            QMessageBox.information(self, APP_NAME,
+                                    f"No readable text was extracted from "
+                                    f"{document.get('name', 'that document')}.")
+            return
+        name = str(document.get("name", "document"))
+        stem = os.path.splitext(os.path.basename(name))[0][:18] or "DOC"
+        references = [f"{stem}-{number:02d}" for number in range(1, len(blocks) + 1)]
+        self._start(self._analysis_worker(texts=blocks, references=references))
+
+    def remove_document(self, index: int) -> None:
+        """Drop one document and its blocks, leaving the rest of the list alone."""
+        if not 0 <= index < len(self.documents):
+            return
+        document = self.documents.pop(index)
+        self.ingest_view.set_documents(self.documents)
+        self._sync_pending_blocks()
+        self.audit.functionality("document removed", name=document.get("name"))
+        self._set_status(
+            f"Removed {document.get('name', 'the document')}  ·  "
+            f"{len(self.pending_blocks)} block(s) still waiting")
+        self._refresh_workflow()
 
     def _analysis_worker(self, **kwargs) -> AnalysisWorker:
         self.duplicates_seen = 0
@@ -962,6 +1024,9 @@ class MainWindow(QMainWindow):
 
     #: Below this many reviewed labels, human decisions are too few to train on
     #: alone and the pipeline's own verdicts are used instead.
+    #: Seconds between mid-run dashboard refreshes during an import.
+    REFRESH_INTERVAL_S = 0.5
+
     MIN_HUMAN_LABELS = 8
 
     def train_model(self) -> None:
@@ -1151,8 +1216,18 @@ class MainWindow(QMainWindow):
         self._by_narrative[key] = len(self.rows)
         self.rows.append(payload)
         self.report_view.table.append_row(payload)
-        self.report_view.table.scrollToBottom()
-        if len(self.rows) % 5 == 0:
+        # Refreshing every fifth row re-aggregated the whole corpus and repainted
+        # four charts mid-run, which cost more per report than analysing it. The
+        # dashboard is not being read while the import is still going, so the
+        # mid-run refresh is throttled to something the eye registers as live and
+        # on_analysis_completed does the authoritative one at the end.
+        now = monotonic()
+        if now - self._last_refresh >= self.REFRESH_INTERVAL_S:
+            self._last_refresh = now
+            # Scrolling belongs on the same clock: asking the view to scroll to
+            # the bottom lays it out again, and at import speed nobody can read
+            # rows going past anyway.
+            self.report_view.table.scrollToBottom()
             self._refresh()
 
     def on_analysis_completed(self, count: int) -> None:
@@ -1176,12 +1251,18 @@ class MainWindow(QMainWindow):
     def on_document_ready(self, payload: Dict[str, object]) -> None:
         """One document was extracted."""
         text = str(payload.pop("text", ""))
-        self.documents.append(payload)
-        self.ingest_view.set_documents(self.documents)
+        blocks: List[str] = []
         if text.strip():
             blocks = [block.strip() for block in text.split("\n\n")
                       if len(block.strip()) > 25] or [text.strip()]
-            self.pending_blocks.extend(blocks)
+        # Kept on the document rather than poured into one shared list, so a
+        # row's own controls can preview, analyse or drop exactly its blocks.
+        payload["_text"] = text
+        payload["_blocks"] = blocks
+        self.documents.append(payload)
+        self.ingest_view.set_documents(self.documents)
+        self._sync_pending_blocks()
+        if text.strip():
             self.ingest_view.set_preview(text[:6000])
         self._set_status(f"{payload['name']} read via {payload['backend']}")
         self.audit.functionality("document read", name=payload.get("name"),

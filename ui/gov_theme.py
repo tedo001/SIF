@@ -148,17 +148,20 @@ QLabel#KpiValue {{
 }}
 QLabel#KpiUnit {{ font-size: 12px; color: {_C["TEXT_DIM"]}; }}
 
+/* Bright enough to read as pressable: dim text on a transparent ground is
+   indistinguishable from a disabled control. */
 QPushButton {{
-    background-color: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.10);
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 5px;
     padding: 9px 15px;
     font-family: {_DISPLAY};
     font-weight: 500;
-    color: {_C["TEXT_DIM"]};
+    color: {_C["TEXT"]};
 }}
 QPushButton:hover {{
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: rgba(255, 255, 255, 0.09);
+    border-color: {_C["ACCENT"]};
     color: {_C["TEXT"]};
 }}
 QPushButton:pressed {{ background-color: rgba(255, 255, 255, 0.03); }}

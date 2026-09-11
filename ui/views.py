@@ -464,14 +464,29 @@ class TableView(QWidget):
     """A full-width page wrapping one table (matrix, hotspots or review)."""
 
     def __init__(self, title: str, subtitle: str,
-                 columns: Sequence[Tuple[str, str, int]]) -> None:
+                 columns: Sequence[Tuple[str, str, int]],
+                 heading: bool = True, empty_note: str = "") -> None:
+        """``heading`` off when the page already carries the same title above."""
         super().__init__()
-        self.panel = Panel(title)
+        self.panel = Panel(title if heading else "")
         self.table = DataTable(columns)
-        caption = QLabel(subtitle)
-        caption.setObjectName("Faint")
-        caption.setWordWrap(True)
-        self.panel.add(caption)
+        if heading:
+            caption = QLabel(subtitle)
+            caption.setObjectName("Faint")
+            caption.setWordWrap(True)
+            self.panel.add(caption)
+
+        # An empty table with no explanation reads as a broken page. This says
+        # which it is - nothing analysed yet, or analysed and nothing qualified.
+        self._empty_note = QLabel(empty_note)
+        self._empty_note.setObjectName("Muted")
+        self._empty_note.setWordWrap(True)
+        self._empty_note.setVisible(bool(empty_note))
+        self._empty_text = empty_note
+        # A new page has no rows yet, so it starts in the same state set_rows
+        # would leave it in - otherwise the note and an empty grid show together.
+        self.table.setVisible(not empty_note)
+        self.panel.add(self._empty_note)
         self.panel.add(self.table, stretch=1)
 
         layout = QVBoxLayout(self)
@@ -480,6 +495,8 @@ class TableView(QWidget):
 
     def set_rows(self, payloads: Sequence[Dict[str, object]]) -> None:
         self.table.set_rows(payloads)
+        self._empty_note.setVisible(bool(self._empty_text) and not payloads)
+        self.table.setVisible(bool(payloads))
 
 
 class BatchUploadView(QWidget):
